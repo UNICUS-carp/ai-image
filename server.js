@@ -1,10 +1,10 @@
-// server.js — リクエスト可視化 & タイムアウト付き（Railway向け）
+// server.js — ChatKit セッション + 画像生成テストAPI（Railway向け・確定版）
 import express from "express";
 import cors from "cors";
 
 const app = express();
 
-// 1) リクエストが来たことを必ずログに残す（最初に入れる）
+// リクエスト可視化（ログ）
 app.use((req, _res, next) => {
   console.log(`[req] ${req.method} ${req.url}`);
   next();
@@ -21,48 +21,38 @@ app.get("/", (_req, res) => {
   res.type("text/plain").send("illustauto-backend: ok");
 });
 
-// デバッグ用：POSTが届くか確認（エコー）
+// デバッグエコー
 app.post("/debug/echo", (req, res) => {
   console.log("[echo] body:", req.body);
   res.json({ ok: true, body: req.body ?? null });
 });
 
-// ChatKit セッション発行API
+// ChatKit: clientToken 発行（確定仕様）
 app.post("/api/create-session", async (req, res) => {
   console.log("[create-session] start");
   try {
     const apiKey = process.env.OPENAI_API_KEY;
     const workflowId = process.env.WORKFLOW_ID;
     const workflowVersion = process.env.WORKFLOW_VERSION; // 任意
-
     if (!apiKey || !workflowId) {
-      console.error("[cfg] missing env", { hasKey: !!apiKey, hasWorkflowId: !!workflowId });
       return res.status(500).json({ error: "SERVER_NOT_CONFIGURED" });
     }
 
-    // user は文字列で送る
+    // user は文字列
     const baseUser = typeof req.body?.userId === "string" ? req.body.userId : "anon";
     const userId = `${baseUser}-${Math.random().toString(36).slice(2, 10)}`;
-    console.log("[create-session] userId:", userId);
 
-    // ----------------------------------------------------------------
-    // ChatKit 呼び出し（ヘッダー必須 & タイムアウト15秒）
-    // ----------------------------------------------------------------
+    // ChatKit セッション作成
     const headers = {
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
       "OpenAI-Beta": "chatkit_beta=v1",
     };
-
     const workflowObj = workflowVersion
       ? { id: workflowId, version: String(workflowVersion) }
       : { id: workflowId };
-
     const body = { user: userId, workflow: workflowObj };
-    console.log("[create-session] request headers:", headers);
-    console.log("[create-session] request body:", body);
 
-    // fetch にタイムアウトを付与
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 15000);
 
@@ -86,7 +76,6 @@ app.post("/api/create-session", async (req, res) => {
 
     const data = await resp.json().catch(() => ({}));
     const clientToken = data.client_secret || data.clientToken || data.token || null;
-
     if (!clientToken) {
       console.error("[create-session] token missing:", data);
       return res.status(502).json({ error: "TOKEN_MISSING", raw: data });
@@ -96,6 +85,64 @@ app.post("/api/create-session", async (req, res) => {
     return res.json({ clientToken });
   } catch (e) {
     console.error("[create-session] unexpected:", e);
+    return res.status(500).json({ error: "UNEXPECTED", message: String(e) });
+  }
+});
+
+// 画像生成テストAPI（最小）
+// フロントから { prompt } を受け取り、OpenAI Images API (gpt-image-1) を呼ぶ
+app.post("/api/generate-test-image", async (req, res) => {
+  console.log("[gen] start");
+  try {
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey) return res.status(500).json({ error: "SERVER_NOT_CONFIGURED" });
+
+    const prompt = typeof req.body?.prompt === "string" && req.body.prompt.trim()
+      ? req.body.prompt.trim()
+      : "A simple blue circle icon on white background";
+
+    // 15秒タイムアウト
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
+
+    const resp = await fetch("https://api.openai.com/v1/images/generations", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "gpt-image-1",
+        prompt,
+        size: "1024x1024",
+        response_format: "b64_json",
+      }),
+      signal: controller.signal,
+    }).catch((e) => {
+      console.error("[gen] fetch error:", e);
+      throw e;
+    });
+
+    clearTimeout(timeout);
+
+    if (!resp.ok) {
+      const errText = await resp.text().catch(() => "(no body)");
+      console.error("[gen] failed:", resp.status, errText);
+      return res.status(502).json({ error: "IMAGE_API_FAILED", detail: errText, status: resp.status });
+    }
+
+    const data = await resp.json().catch(() => ({}));
+    const b64 = data?.data?.[0]?.b64_json || null;
+    if (!b64) {
+      console.error("[gen] missing image in response:", data);
+      return res.status(502).json({ error: "IMAGE_MISSING", raw: data });
+    }
+
+    const dataUrl = `data:image/png;base64,${b64}`;
+    console.log("[gen] success");
+    return res.json({ dataUrl });
+  } catch (e) {
+    console.error("[gen] unexpected:", e);
     return res.status(500).json({ error: "UNEXPECTED", message: String(e) });
   }
 });
