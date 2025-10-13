@@ -27,17 +27,18 @@ app.post("/api/create-session", async (req, res) => {
     const baseUser = typeof req.body?.userId === "string" ? req.body.userId : "anon";
     const userId = `${baseUser}-${Math.random().toString(36).slice(2, 10)}`;
 
-    // ChatKit のセッション作成（エンドポイント名は将来変更の可能性あり）
+    // ★ 必須ヘッダー: OpenAI-Beta: chatkit_beta=v1 を追加
     const resp = await fetch("https://api.openai.com/v1/chatkit/sessions", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
+        "OpenAI-Beta": "chatkit_beta=v1"
       },
       body: JSON.stringify({
         workflow_id: workflowId, // wf_...
-        user: { id: userId },
-      }),
+        user: { id: userId }
+      })
     });
 
     if (!resp.ok) {
