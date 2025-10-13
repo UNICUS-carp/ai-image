@@ -1,4 +1,8 @@
-// server.js — ChatKit「セッション発行API」最小版（Railway向け・フォールバック強化版）
+// server.js — ChatKit「セッション発行API」最小版（確定版）
+// 要求仕様（あなたのログから確定）:
+//   - headers: "OpenAI-Beta": "chatkit_beta=v1" 必須
+//   - body: { workflow: { id: "wf_..." }, user: "<string>" }
+
 import express from "express";
 import cors from "cors";
 
@@ -22,57 +26,41 @@ app.post("/api/create-session", async (req, res) => {
       return res.status(500).json({ error: "SERVER_NOT_CONFIGURED" });
     }
 
+    // user は string で送る（ログで要求が確定）
     const baseUser = typeof req.body?.userId === "string" ? req.body.userId : "anon";
     const userId = `${baseUser}-${Math.random().toString(36).slice(2, 10)}`;
-    console.log("[session] start", { workflowId, userId });
 
     const headers = {
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
       "OpenAI-Beta": "chatkit_beta=v1",
     };
-    console.log("[session] headers", headers);
 
-    const endpoint = "https://api.openai.com/v1/chatkit/sessions";
+    const body = {
+      workflow: { id: workflowId },   // ← object で送る（{ id: wf_... }）
+      user: userId,                    // ← string で送る（"..."）
+    };
 
-    // 送信候補（順番に試す）
-    const candidates = [
-      { note: "workflow:string", body: { workflow: workflowId, user: { id: userId } } },
-      { note: "workflow:object_id", body: { workflow: { id: workflowId }, user: { id: userId } } },
-      { note: "workflow:object_id_version", body: { workflow: { id: workflowId, version: "1" }, user: { id: userId } } },
-      { note: "workflow_id:string (legacy)", body: { workflow_id: workflowId, user: { id: userId } } },
-    ];
+    const resp = await fetch("https://api.openai.com/v1/chatkit/sessions", {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+    });
 
-    let lastErrText = "";
-    for (const cand of candidates) {
-      console.log("[session] try", cand.note, cand.body);
-      const resp = await fetch(endpoint, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(cand.body),
-      });
-
-      if (resp.ok) {
-        const data = await resp.json();
-        const clientToken = data.client_secret || data.clientToken || data.token || null;
-        if (!clientToken) {
-          console.error("[session] token missing", data);
-          return res.status(502).json({ error: "TOKEN_MISSING", raw: data, used: cand.note });
-        }
-        console.log("[session] success with", cand.note);
-        return res.json({ clientToken, used: cand.note });
-      }
-
+    if (!resp.ok) {
       const errText = await resp.text();
-      lastErrText = errText;
-      console.error("[session] fail", cand.note, resp.status, errText);
+      console.error("[session] fail", resp.status, errText);
+      return res.status(502).json({ error: "CHATKIT_SESSION_FAILED", detail: errText });
     }
 
-    return res.status(502).json({
-      error: "CHATKIT_SESSION_FAILED",
-      detail: lastErrText,
-      tried: candidates.map(c => c.note),
-    });
+    const data = await resp.json();
+    const clientToken = data.client_secret || data.clientToken || data.token || null;
+    if (!clientToken) {
+      console.error("[session] token missing", data);
+      return res.status(502).json({ error: "TOKEN_MISSING", raw: data });
+    }
+
+    return res.json({ clientToken });
   } catch (e) {
     console.error("[session] unexpected", e);
     return res.status(500).json({ error: "UNEXPECTED", message: String(e) });
