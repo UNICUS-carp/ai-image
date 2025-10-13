@@ -1,20 +1,16 @@
-// server.js — ChatKit 用「セッション発行API」最小版（Railway向け）
 import express from "express";
 import cors from "cors";
 
 const app = express();
 app.use(express.json());
 
-// フロント（ロリポップ）から呼べるようCORS許可
 const allowed = process.env.ALLOWED_ORIGIN || "*";
 app.use(cors({ origin: allowed }));
 
-// 動作確認用
 app.get("/", (_req, res) => {
   res.type("text/plain").send("illustauto-backend: ok");
 });
 
-// ChatKit セッション発行API
 app.post("/api/create-session", async (req, res) => {
   try {
     const apiKey = process.env.OPENAI_API_KEY;
@@ -27,18 +23,21 @@ app.post("/api/create-session", async (req, res) => {
     const baseUser = typeof req.body?.userId === "string" ? req.body.userId : "anon";
     const userId = `${baseUser}-${Math.random().toString(36).slice(2, 10)}`;
 
-    // ★ 必須ヘッダー: OpenAI-Beta: chatkit_beta=v1 を追加
+    // 送信ヘッダーを可視化
+    const headers = {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+      "OpenAI-Beta": "chatkit_beta=v1",
+    };
+    console.log("headers:", headers);
+
     const resp = await fetch("https://api.openai.com/v1/chatkit/sessions", {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-        "OpenAI-Beta": "chatkit_beta=v1"
-      },
+      headers,
       body: JSON.stringify({
         workflow_id: workflowId, // wf_...
-        user: { id: userId }
-      })
+        user: { id: userId },
+      }),
     });
 
     if (!resp.ok) {
@@ -61,7 +60,6 @@ app.post("/api/create-session", async (req, res) => {
   }
 });
 
-// Railway が使用するポート
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`server listening on :${PORT}`);
