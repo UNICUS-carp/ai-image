@@ -1,9 +1,10 @@
-// server.js — 診断用エンドポイント付き / IPv4優先 / 画像生成はURL受取 / 60sタイムアウト＋リトライ
+// server.js — ChatKit セッション + 画像生成テストAPI
+// 兼 診断エンドポイント（IPv4優先 / 60sタイムアウト / リトライ / Base64 or URL 両対応）
 import express from "express";
 import cors from "cors";
 import dns from "dns";
 
-// ==== 重要: IPv4を優先（IPv6経路のハング対策）====
+// IPv6 経路でのハング対策：IPv4を優先
 dns.setDefaultResultOrder("ipv4first");
 
 const app = express();
@@ -11,21 +12,49 @@ app.use((req, _res, next) => { console.log(`[req] ${req.method} ${req.url}`); ne
 app.use(express.json());
 app.use(cors({ origin: process.env.ALLOWED_ORIGIN || "*" }));
 
-// ヘルス
+// ─────────── ヘルスチェック
 app.get("/", (_req, res) => res.type("text/plain").send("illustauto-backend: ok"));
 
-// デバッグエコー
+// ─────────── デバッグ: エコー
 app.post("/debug/echo", (req, res) => res.json({ ok: true, body: req.body ?? null }));
 
-// ======== ChatKit セッション（前回と同じ・動作実績あり）========
+// ─────────── デバッグ: OpenAI 軽量API疎通
+app.get("/debug/openai-ping", async (_req, res) => {
+  try {
+    const t0 = Date.now();
+    const resp = await fetch("https://api.openai.com/v1/models?limit=1", {
+      headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
+    });
+    const elapsed = Date.now() - t0;
+    const txt = await resp.text().catch(() => "(no body)");
+    res.json({ ok: resp.ok, status: resp.status, elapsed, bodySample: txt.slice(0, 200) });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
+// ─────────── デバッグ: 送信元グローバルIP
+app.get("/debug/ip", async (_req, res) => {
+  try {
+    const ip = await fetch("https://api.ipify.org?format=json").then((r) => r.json());
+    res.json({ ip });
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+// ─────────── ChatKit: clientToken 発行（実績ありの安定版）
 app.post("/api/create-session", async (req, res) => {
   console.log("[create-session] start");
   try {
     const apiKey = process.env.OPENAI_API_KEY;
     const workflowId = process.env.WORKFLOW_ID;
-    const workflowVersion = process.env.WORKFLOW_VERSION;
-    if (!apiKey || !workflowId) return res.status(500).json({ error: "SERVER_NOT_CONFIGURED" });
+    const workflowVersion = process.env.WORKFLOW_VERSION; // 任意
+    if (!apiKey || !workflowId) {
+      return res.status(500).json({ error: "SERVER_NOT_CONFIGURED" });
+    }
 
+    // user は文字列必須
     const baseUser = typeof req.body?.userId === "string" ? req.body.userId : "anon";
     const userId = `${baseUser}-${Math.random().toString(36).slice(2, 10)}`;
 
@@ -53,6 +82,7 @@ app.post("/api/create-session", async (req, res) => {
       console.error("[create-session] failed:", resp.status, errText);
       return res.status(502).json({ error: "CHATKIT_SESSION_FAILED", detail: errText, status: resp.status });
     }
+
     const data = await resp.json().catch(() => ({}));
     const clientToken = data.client_secret || data.clientToken || data.token || null;
     if (!clientToken) return res.status(502).json({ error: "TOKEN_MISSING", raw: data });
@@ -65,11 +95,11 @@ app.post("/api/create-session", async (req, res) => {
   }
 });
 
-// ======== 画像生成（URL受取 / 60sタイムアウト＋リトライ）========
+// ─────────── 画像生成（Base64 or URL 両対応 / 60sタイムアウト＋リトライ）
 const IMAGE_ENDPOINT = "https://api.openai.com/v1/images/generations";
 const IMAGE_MODEL = process.env.IMAGE_MODEL || "gpt-image-1";
-const IMAGE_TIMEOUT_MS = Number(process.env.IMAGE_TIMEOUT_MS || 60000);
-const IMAGE_RETRIES = Number(process.env.IMAGE_RETRIES || 2); // 合計3回
+const IMAGE_TIMEOUT_MS = Number(process.env.IMAGE_TIMEOUT_MS || 60000); // 60s
+const IMAGE_RETRIES = Number(process.env.IMAGE_RETRIES || 2); // 追加リトライ回数（合計3回）
 
 async function imagesFetchWithRetries(init, tryCount = IMAGE_RETRIES) {
   const start = Date.now();
@@ -132,7 +162,7 @@ app.post("/api/generate-test-image", async (req, res) => {
         model: IMAGE_MODEL,
         prompt,
         size: "1024x1024",
-        // response_format は指定しない（URL返却）
+        // response_format は指定しない（URL返却が基本だが、環境により b64_json の場合あり）
       }),
     };
 
@@ -151,14 +181,23 @@ app.post("/api/generate-test-image", async (req, res) => {
     }
 
     const data = await resp.json().catch(() => ({}));
+
+    // ←← ここがポイント：URL でも Base64 でも受け付ける
     const url = data?.data?.[0]?.url || null;
-    if (!url) {
-      console.error("[gen] missing url in response:", data);
-      return res.status(502).json({ error: "IMAGE_MISSING", raw: data, elapsed, attempt: attempt + 1 });
+    const b64 = data?.data?.[0]?.b64_json || null;
+
+    if (url) {
+      console.log(`[gen] success (url) in ${elapsed}ms (attempt ${attempt + 1})`);
+      return res.json({ url, elapsed, attempt: attempt + 1 });
+    }
+    if (b64) {
+      const dataUrl = `data:image/png;base64,${b64}`;
+      console.log(`[gen] success (b64) in ${elapsed}ms (attempt ${attempt + 1})`);
+      return res.json({ dataUrl, elapsed, attempt: attempt + 1 });
     }
 
-    console.log(`[gen] success in ${elapsed}ms (attempt ${attempt + 1})`);
-    return res.json({ url, elapsed, attempt: attempt + 1 });
+    console.error("[gen] missing image in response:", data);
+    return res.status(502).json({ error: "IMAGE_MISSING", raw: data, elapsed, attempt: attempt + 1 });
   } catch (e) {
     console.error("[gen] unexpected:", e);
     const msg = e?.name === "AbortError" ? "AbortError: timeout" : String(e?.message || e);
@@ -166,30 +205,6 @@ app.post("/api/generate-test-image", async (req, res) => {
   }
 });
 
-// ======== 根本原因の切り分け用（軽量APIとIP確認）========
-app.get("/debug/openai-ping", async (_req, res) => {
-  try {
-    const t0 = Date.now();
-    const resp = await fetch("https://api.openai.com/v1/models?limit=1", {
-      headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
-    });
-    const elapsed = Date.now() - t0;
-    const txt = await resp.text().catch(() => "(no body)");
-    res.json({ ok: resp.ok, status: resp.status, elapsed, bodySample: txt.slice(0, 200) });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: String(e) });
-  }
-});
-
-app.get("/debug/ip", async (_req, res) => {
-  try {
-    const ip = await fetch("https://api.ipify.org?format=json").then((r) => r.json());
-    res.json({ ip });
-  } catch (e) {
-    res.status(500).json({ error: String(e) });
-  }
-});
-
-// 起動
+// ─────────── 起動
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`server listening on :${PORT}`));
