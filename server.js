@@ -1,14 +1,11 @@
-// server.js — ChatKit用の「セッション発行API」最小版（Railway向け）
-// 依存: express, cors（package.jsonに記載済み）
-// 必要な環境変数: OPENAI_API_KEY, WORKFLOW_ID, ALLOWED_ORIGIN(optional)
-
+// server.js — ChatKit 用「セッション発行API」最小版（Railway向け）
 import express from "express";
 import cors from "cors";
 
 const app = express();
 app.use(express.json());
 
-// CORS: フロント(ロリポップ)から呼べるようにする
+// フロント（ロリポップ）から呼べるようCORS許可
 const allowed = process.env.ALLOWED_ORIGIN || "*";
 app.use(cors({ origin: allowed }));
 
@@ -18,31 +15,28 @@ app.get("/", (_req, res) => {
 });
 
 // ChatKit セッション発行API
-// フロントから POST /api/create-session を叩く → { clientToken } を返す想定
 app.post("/api/create-session", async (req, res) => {
   try {
     const apiKey = process.env.OPENAI_API_KEY;
     const workflowId = process.env.WORKFLOW_ID;
+
     if (!apiKey || !workflowId) {
       return res.status(500).json({ error: "SERVER_NOT_CONFIGURED" });
     }
 
-    // ユーザー識別子（匿名・短命セッション想定）
-    const userId = (req.body?.userId || "anon") + "-" + Math.random().toString(36).slice(2, 10);
+    const baseUser = typeof req.body?.userId === "string" ? req.body.userId : "anon";
+    const userId = `${baseUser}-${Math.random().toString(36).slice(2, 10)}`;
 
-    // ChatKitの「セッション作成」エンドポイントにサーバー側からリクエスト
-    // ※ 注意：エンドポイント/ペイロード名は将来変更される可能性があります。
-    // 公式ガイドの「ChatKitはサーバーで短命トークンを発行してクライアントへ渡す」
-    // という要件に基づいた実装です。
+    // ChatKit のセッション作成（エンドポイント名は将来変更の可能性あり）
     const resp = await fetch("https://api.openai.com/v1/chatkit/sessions", {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${apiKey}`,
+        Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        workflow_id: workflowId,   // ワークフローID（wf_...）
-        user: { id: userId },      // 必要に応じてメタデータ追加
+        workflow_id: workflowId, // wf_...
+        user: { id: userId },
       }),
     });
 
@@ -53,4 +47,21 @@ app.post("/api/create-session", async (req, res) => {
     }
 
     const data = await resp.json();
-    // 期待する形: { client_secret: "..." } / { clientToken: "._
+    const clientToken = data.client_secret || data.clientToken || data.token || null;
+
+    if (!clientToken) {
+      return res.status(502).json({ error: "TOKEN_MISSING", raw: data });
+    }
+
+    return res.json({ clientToken });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: "UNEXPECTED", message: String(e) });
+  }
+});
+
+// Railway が使用するポート
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`server listening on :${PORT}`);
+});
