@@ -1,10 +1,10 @@
-// server.js — ChatKit セッション + 画像生成テストAPI（Railway向け・確定版）
+// server.js — ChatKit セッション + 画像生成テストAPI（URL返却版・確定）
 import express from "express";
 import cors from "cors";
 
 const app = express();
 
-// リクエスト可視化（ログ）
+// リクエスト簡易ログ
 app.use((req, _res, next) => {
   console.log(`[req] ${req.method} ${req.url}`);
   next();
@@ -12,22 +12,22 @@ app.use((req, _res, next) => {
 
 app.use(express.json());
 
-// CORS（ロリポップからも呼べる）
+// CORS（ロリポップから呼べるよう許可）
 const allowed = process.env.ALLOWED_ORIGIN || "*";
 app.use(cors({ origin: allowed }));
 
-// 健康チェック
+// ヘルスチェック
 app.get("/", (_req, res) => {
   res.type("text/plain").send("illustauto-backend: ok");
 });
 
-// デバッグエコー
+// デバッグ用
 app.post("/debug/echo", (req, res) => {
   console.log("[echo] body:", req.body);
   res.json({ ok: true, body: req.body ?? null });
 });
 
-// ChatKit: clientToken 発行（確定仕様）
+// ChatKit: clientToken を発行
 app.post("/api/create-session", async (req, res) => {
   console.log("[create-session] start");
   try {
@@ -38,11 +38,10 @@ app.post("/api/create-session", async (req, res) => {
       return res.status(500).json({ error: "SERVER_NOT_CONFIGURED" });
     }
 
-    // user は文字列
+    // user は「文字列」必須
     const baseUser = typeof req.body?.userId === "string" ? req.body.userId : "anon";
     const userId = `${baseUser}-${Math.random().toString(36).slice(2, 10)}`;
 
-    // ChatKit セッション作成
     const headers = {
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
@@ -89,8 +88,7 @@ app.post("/api/create-session", async (req, res) => {
   }
 });
 
-// 画像生成テストAPI（最小）
-// フロントから { prompt } を受け取り、OpenAI Images API (gpt-image-1) を呼ぶ
+// 画像生成テストAPI（Images API は URL 返却で受け取る）
 app.post("/api/generate-test-image", async (req, res) => {
   console.log("[gen] start");
   try {
@@ -114,8 +112,8 @@ app.post("/api/generate-test-image", async (req, res) => {
       body: JSON.stringify({
         model: "gpt-image-1",
         prompt,
-        size: "1024x1024",
-        response_format: "b64_json",
+        size: "1024x1024"
+        // response_format は指定しない（URLが返る）
       }),
       signal: controller.signal,
     }).catch((e) => {
@@ -132,15 +130,14 @@ app.post("/api/generate-test-image", async (req, res) => {
     }
 
     const data = await resp.json().catch(() => ({}));
-    const b64 = data?.data?.[0]?.b64_json || null;
-    if (!b64) {
-      console.error("[gen] missing image in response:", data);
+    const url = data?.data?.[0]?.url || null;
+    if (!url) {
+      console.error("[gen] missing url in response:", data);
       return res.status(502).json({ error: "IMAGE_MISSING", raw: data });
     }
 
-    const dataUrl = `data:image/png;base64,${b64}`;
     console.log("[gen] success");
-    return res.json({ dataUrl });
+    return res.json({ url });
   } catch (e) {
     console.error("[gen] unexpected:", e);
     return res.status(500).json({ error: "UNEXPECTED", message: String(e) });
