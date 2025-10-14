@@ -1,152 +1,265 @@
-// server.js (ESM)
+// server.js — ChatKit セッション(OpenAI) + 画像生成（OpenAI/Google自動切替）
+// ・Google: Imagen (Gemini API) 画像生成 → Base64応答対応
+// ・OpenAI: Images API（URL/B64の両方に対応）
+// ・診断APIあり（/debug/openai-ping, /debug/ip）
+// 参考: Google Imagen (Gemini API) docs https://ai.google.dev/gemini-api/docs/imagen
+
 import express from "express";
 import cors from "cors";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
+import dns from "dns";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname  = path.dirname(__filename);
+dns.setDefaultResultOrder("ipv4first");
 
-const app  = express();
-const PORT = process.env.PORT || 8080;
+const app = express();
+app.use((req, _res, next) => { console.log(`[req] ${req.method} ${req.url}`); next(); });
+app.use(express.json());
+app.use(cors({ origin: process.env.ALLOWED_ORIGIN || "*" }));
 
-// ===== 環境変数 =====
-const PROVIDER = (process.env.PROVIDER || "google").toLowerCase(); // "google" 固定でOK
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
-const IMAGE_TIMEOUT_SECONDS = Number(process.env.IMAGE_TIMEOUT_SECONDS || 120);
+// ───────────── ヘルス
+app.get("/", (_req, res) => res.type("text/plain").send("illustauto-backend: ok"));
 
-// ===== ミドルウェア =====
-app.use(express.json({ limit: "2mb" }));
-app.use(cors()); // 既存サイトからのCORSを許可（必要なら origin 指定に変更）
+// ───────────── 診断
+app.post("/debug/echo", (req, res) => res.json({ ok: true, body: req.body ?? null }));
 
-// ルート健全性
-app.get("/", (_req, res) => res.type("text/plain").send("OK"));
-
-// 簡易デバッグ
-app.get("/debug/ip", (req, res) => {
-  res.json({ ip: req.headers["x-forwarded-for"] || req.socket.remoteAddress || null });
-});
 app.get("/debug/openai-ping", async (_req, res) => {
-  // 以前の疎通テストのダミー
-  res.json({ ok: true, status: 200, bodySample: "{ mock ping }" });
+  try {
+    const t0 = Date.now();
+    const resp = await fetch("https://api.openai.com/v1/models?limit=1", {
+      headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
+    });
+    const elapsed = Date.now() - t0;
+    const txt = await resp.text().catch(() => "(no body)");
+    res.json({ ok: resp.ok, status: resp.status, elapsed, bodySample: txt.slice(0, 200) });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e) });
+  }
 });
 
-// ===== セッション（ダミーでOK：clientTokenを返すだけ） =====
+app.get("/debug/ip", async (_req, res) => {
+  try {
+    const ip = await fetch("https://api.ipify.org?format=json").then((r) => r.json());
+    res.json({ ip });
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+// ───────────── ChatKit セッション（OpenAI）
 app.post("/api/create-session", async (req, res) => {
+  console.log("[create-session] start");
   try {
-    console.log("[create-session] start");
-    const userId = (req.body && req.body.userId) || "stage-user";
-    // 実際のChatKitセッションは使わず、前回同様ダミートークンでOK
-    const token = "ek_" + Math.random().toString(16).slice(2) + "_" + Date.now().toString(36);
-    console.log("[create-session] success");
-    res.json({ clientToken: token, userId });
-  } catch (err) {
-    console.error("[create-session] error", err);
-    res.status(500).json({ error: "CHATKIT_SESSION_FAILED", detail: String(err) });
-  }
-});
-
-// ===== 画像生成（Google優先、失敗時はSVGプレースホルダー） =====
-app.post("/api/generate-test-image", async (req, res) => {
-  const t0 = Date.now();
-  try {
-    const { prompt, provider } = req.body || {};
-    console.log("[gen] start", { provider, promptLength: (prompt || "").length });
-
-    // タイムアウト制御
-    const ac = new AbortController();
-    const timer = setTimeout(() => ac.abort(), IMAGE_TIMEOUT_SECONDS * 1000);
-
-    // プロバイダは google 固定でOK（要件通り）
-    let result = await generateWithGoogle(prompt, ac.signal);
-
-    clearTimeout(timer);
-
-    if (result.ok) {
-      const elapsed = Date.now() - t0;
-      return res.json({
-        dataUrl: result.dataUrl, // PNG or SVG data URL
-        elapsed,
-        provider: result.provider,
-        warning: result.warning || undefined,
-      });
-    } else {
-      const elapsed = Date.now() - t0;
-      console.warn("[gen] google failed:", result.error);
-      // フォールバック：青い円SVG（以前もこれで通っていました）
-      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024">
-  <rect width="100%" height="100%" fill="#e5f1ff"/>
-  <circle cx="512" cy="512" r="300" fill="#3b82f6"/>
-</svg>`;
-      const dataUrl = "data:image/svg+xml;base64," + Buffer.from(svg, "utf8").toString("base64");
-      return res.json({
-        dataUrl,
-        elapsed,
-        provider: "placeholder",
-        warning: result.error?.msg || "Google API fallback",
-      });
+    const apiKey = process.env.OPENAI_API_KEY;
+    const workflowId = process.env.WORKFLOW_ID;
+    const workflowVersion = process.env.WORKFLOW_VERSION; // 任意
+    if (!apiKey || !workflowId) {
+      return res.status(500).json({ error: "SERVER_NOT_CONFIGURED" });
     }
-  } catch (err) {
-    console.error("[gen] error", err);
-    res.status(500).json({ error: "UNEXPECTED", message: String(err) });
-  }
-});
 
-// ====== Google 画像生成（シンプル版） ======
-// ※ Google側の仕様変更やリージョン制約により404/429等が出た場合はそのままフォールバック
-async function generateWithGoogle(prompt, signal) {
-  if (!GEMINI_API_KEY) {
-    return { ok: false, error: { msg: "GEMINI_API_KEY missing" } };
-  }
-  const body = {
-    // ここでは簡易なText-to-Imageエンドポイント想定（ベンダ側の更新で404になることも）
-    // 実サービス接続は別途本実装で置換する前提
-    prompt: prompt || "青い丸のシンプルなロゴ風イメージ",
-    size: "1024x1024",
-  };
+    const baseUser = typeof req.body?.userId === "string" ? req.body.userId : "anon";
+    const userId = `${baseUser}-${Math.random().toString(36).slice(2, 10)}`;
 
-  try {
-    const resp = await fetch(
-      // 参考用の仮URL（Googleのバージョン変更により404もありうる）:
-      // v1beta/images:generate など、使用する実エンドポイントに合わせて差し替え
-      "https://generativelanguage.googleapis.com/v1beta/models/gemini-image-1:generate",
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-goog-api-key": GEMINI_API_KEY,
-        },
-        body: JSON.stringify(body),
-        signal,
-      }
-    );
+    const headers = {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+      "OpenAI-Beta": "chatkit_beta=v1",
+    };
+    const workflowObj = workflowVersion ? { id: workflowId, version: String(workflowVersion) } : { id: workflowId };
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
+
+    const resp = await fetch("https://api.openai.com/v1/chatkit/sessions", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ user: userId, workflow: workflowObj }),
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeout);
 
     if (!resp.ok) {
-      const txt = await safeText(resp);
-      return { ok: false, error: { msg: `Google API error ${resp.status}`, status: resp.status, payload: txt } };
+      const errText = await resp.text().catch(() => "(no body)");
+      console.error("[create-session] failed:", resp.status, errText);
+      return res.status(502).json({ error: "CHATKIT_SESSION_FAILED", detail: errText, status: resp.status });
     }
 
-    // 実データはプロバイダ仕様に依存。ここでは PNG base64 を想定。
-    const data = await resp.json();
-    const b64 = data?.candidates?.[0]?.content?.parts?.[0]?.inline_data?.data;
-    if (!b64) {
-      return { ok: false, error: { msg: "Google API: no image in response" } };
-    }
-    const dataUrl = `data:image/png;base64,${b64}`;
-    return { ok: true, dataUrl, provider: "google" };
+    const data = await resp.json().catch(() => ({}));
+    const clientToken = data.client_secret || data.clientToken || data.token || null;
+    if (!clientToken) return res.status(502).json({ error: "TOKEN_MISSING", raw: data });
+
+    console.log("[create-session] success");
+    return res.json({ clientToken });
   } catch (e) {
-    if (e?.name === "AbortError") {
-      return { ok: false, error: { msg: "Timeout" } };
-    }
-    return { ok: false, error: { msg: String(e) } };
+    console.error("[create-session] unexpected:", e);
+    return res.status(500).json({ error: "UNEXPECTED", message: String(e) });
   }
-}
-
-async function safeText(resp) {
-  try { return await resp.text(); } catch { return undefined; }
-}
-
-// ===== サーバ起動 =====
-app.listen(PORT, () => {
-  console.log(`server listening on :${PORT}`);
 });
+
+// ───────────── 画像生成（OpenAI/Google 切替）
+const IMAGE_TIMEOUT_MS = Number(process.env.IMAGE_TIMEOUT_MS || 60000);
+const IMAGE_RETRIES = Number(process.env.IMAGE_RETRIES || 2); // 合計3回
+
+function getProvider(req) {
+  const p = (req.body?.provider || process.env.PROVIDER || "").toString().toLowerCase();
+  if (p.startsWith("google")) return "google"; // "google", "google-gemini", etc.
+  return "openai";
+}
+
+async function fetchWithRetries(doFetch, tryCount = IMAGE_RETRIES) {
+  const start = Date.now();
+  let lastErr = null;
+
+  for (let attempt = 0; attempt <= tryCount; attempt++) {
+    const label = `attempt ${attempt + 1}/${tryCount + 1}`;
+    try {
+      console.log(`[gen] ${label} → calling provider`);
+      const { ok, data, status, errText } = await doFetch(IMAGE_TIMEOUT_MS);
+      if (ok) return { ok, data, attempt, elapsed: Date.now() - start };
+      // リトライ対象: 429/5xx とネットワークエラーは doFetch 側で errText を返す
+      if (status && (status === 429 || (status >= 500 && status <= 599))) {
+        console.warn(`[gen] ${label} transient ${status}: ${errText?.slice?.(0, 180)}`);
+        lastErr = new Error(`status ${status}`);
+      } else {
+        // 非リトライ
+        return { ok: false, status, errText, attempt, elapsed: Date.now() - start };
+      }
+    } catch (e) {
+      console.warn(`[gen] ${label} error:`, e?.name || e);
+      lastErr = e;
+    }
+    const backoff = attempt === 0 ? 0 : attempt === 1 ? 2000 : 5000;
+    if (attempt < tryCount) {
+      console.log(`[gen] waiting ${backoff}ms before retry...`);
+      await new Promise((r) => setTimeout(r, backoff));
+    }
+  }
+  throw lastErr || new Error("ALL_RETRIES_FAILED");
+}
+
+// OpenAI 実装（URL or b64_json）
+async function openaiGenerate(prompt, timeoutMs) {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) return { ok: false, status: 500, errText: "SERVER_NOT_CONFIGURED (OPENAI_API_KEY)" };
+
+  const controller = new AbortController();
+  const t = setTimeout(() => controller.abort(), timeoutMs);
+
+  const resp = await fetch("https://api.openai.com/v1/images/generations", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    },
+    body: JSON.stringify({
+      model: process.env.IMAGE_MODEL || "gpt-image-1",
+      prompt,
+      size: "1024x1024",
+    }),
+    signal: controller.signal,
+  }).catch((e) => ({ __error: e }));
+
+  clearTimeout(t);
+
+  if (resp?.__error) return { ok: false, errText: String(resp.__error) };
+  if (!resp.ok) {
+    const errText = await resp.text().catch(() => "(no body)");
+    return { ok: false, status: resp.status, errText };
+  }
+
+  const data = await resp.json().catch(() => ({}));
+  // url または b64_json
+  const url = data?.data?.[0]?.url || null;
+  const b64 = data?.data?.[0]?.b64_json || null;
+  if (url) return { ok: true, data: { url } };
+  if (b64) return { ok: true, data: { dataUrl: `data:image/png;base64,${b64}` } };
+  return { ok: false, status: 502, errText: "IMAGE_MISSING" };
+}
+
+// Google（Imagen）実装（AI Studio APIキーで Base64 応答）
+// Docs: REST sample shows :predict on imagen-4.0-generate-001 with x-goog-api-key header. :contentReference[oaicite:1]{index=1}
+async function googleGenerate(prompt, timeoutMs) {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) return { ok: false, status: 500, errText: "SERVER_NOT_CONFIGURED (GEMINI_API_KEY)" };
+
+  const model = process.env.GOOGLE_IMAGE_MODEL || "imagen-4.0-generate-001";
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:predict`;
+
+  const controller = new AbortController();
+  const t = setTimeout(() => controller.abort(), timeoutMs);
+
+  const resp = await fetch(url, {
+    method: "POST",
+    headers: {
+      "x-goog-api-key": apiKey,
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    },
+    body: JSON.stringify({
+      instances: [{ prompt }],
+      parameters: {
+        sampleCount: 1,
+        // aspectRatio は要件: 1:1/16:9/9:16 を想定。必要なら body.size からマッピング可。
+        // aspectRatio: "1:1",
+      },
+    }),
+    signal: controller.signal,
+  }).catch((e) => ({ __error: e }));
+
+  clearTimeout(t);
+
+  if (resp?.__error) return { ok: false, errText: String(resp.__error) };
+  if (!resp.ok) {
+    const errText = await resp.text().catch(() => "(no body)");
+    return { ok: false, status: resp.status, errText };
+  }
+
+  const data = await resp.json().catch(() => ({}));
+  // 応答形式（例）: { predictions: [ { generatedImages: [ { image: { imageBytes: "base64..." } } ] } ] }
+  const bytes =
+    data?.predictions?.[0]?.generatedImages?.[0]?.image?.imageBytes ||
+    data?.generatedImages?.[0]?.image?.imageBytes ||
+    null;
+
+  if (!bytes) return { ok: false, status: 502, errText: "IMAGE_MISSING (no imageBytes)" };
+  return { ok: true, data: { dataUrl: `data:image/png;base64,${bytes}` } };
+}
+
+app.post("/api/generate-test-image", async (req, res) => {
+  console.log("[gen] start");
+  try {
+    const prompt =
+      typeof req.body?.prompt === "string" && req.body.prompt.trim()
+        ? req.body.prompt.trim()
+        : "A simple blue circle icon on white background";
+
+    const provider = getProvider(req); // "google" or "openai"
+    const doFetch = async (timeoutMs) => {
+      if (provider === "google") {
+        return await googleGenerate(prompt, timeoutMs);
+      } else {
+        return await openaiGenerate(prompt, timeoutMs);
+      }
+    };
+
+    const { ok, data, status, errText, attempt, elapsed } = await fetchWithRetries(doFetch);
+
+    if (!ok) {
+      console.error("[gen] failed:", status, errText);
+      return res
+        .status(status || 502)
+        .json({ error: "IMAGE_API_FAILED", detail: errText, status: status || 502, attempt: (attempt ?? 0) + 1, elapsed });
+    }
+
+    console.log(`[gen] success by ${provider} in ${elapsed}ms (attempt ${(attempt ?? 0) + 1})`);
+    return res.json({ ...data, provider, elapsed, attempt: (attempt ?? 0) + 1 });
+  } catch (e) {
+    console.error("[gen] unexpected:", e);
+    const msg = e?.name === "AbortError" ? "AbortError: timeout" : String(e?.message || e);
+    return res.status(500).json({ error: "UNEXPECTED", message: msg });
+  }
+});
+
+// ───────────── 起動
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`server listening on :${PORT}`));
