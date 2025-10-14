@@ -1,16 +1,12 @@
-// server.js
-// ランタイム: Node.js 18（CommonJS）
-// 仕様: プロバイダは Google 固定。画像生成はまず Google を試行し、失敗時はプレースホルダPNGを返す。
-// タイムアウト: 120秒。リトライ: 最大2回（指数バックオフ）。
-// CORS: 任意オリジン許可（必要に応じてホワイトリスト化可能）。
-
-const express = require("express");
-const cors = require("cors");
+// server.js (ESM版)
+// Node 18 / Express / "type":"module" 前提
+import express from "express";
+import cors from "cors";
 
 const app = express();
 app.use(express.json({ limit: "1mb" }));
 
-// ---- CORS（必要なら origin を特定ドメインに調整）
+// ---- CORS（必要なら origin を固定ドメインに変えてください）
 app.use(
   cors({
     origin: true,
@@ -18,22 +14,12 @@ app.use(
   })
 );
 
-// ---- ログ（最低限）
-app.use((req, res, next) => {
-  const start = Date.now();
-  res.on("finish", () => {
-    const elapsed = Date.now() - start;
-    console.log(`[req] ${req.method} ${req.path} ${res.statusCode} ${elapsed}ms`);
-  });
-  next();
-});
-
 // ---- 環境変数
 const PORT = process.env.PORT || 8080;
 const PROVIDER = "google";
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
 
-// ---- ユーティリティ: 待ち時間
+// ---- ユーティリティ
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ---- タイムアウト付き fetch
@@ -48,7 +34,7 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 120000) {
   }
 }
 
-// ---- リトライ付き: Google 画像生成（失敗時 throw）
+// ---- Google画像生成（失敗時 throw）
 async function generateImageWithGoogle(prompt) {
   if (!GEMINI_API_KEY) {
     const err = new Error("GEMINI_API_KEY is missing");
@@ -56,25 +42,18 @@ async function generateImageWithGoogle(prompt) {
     throw err;
   }
 
-  // Google AI Studio (Generative Language API) の images:generate 互換エンドポイント想定
-  // 参考: https://ai.google.dev/api/rest/v1beta/images
-  // モデル名は環境により異なるため、代表例を使用（必要に応じて差し替え）
-  const model = "imagen-3.0-generate"; // 例: imagen-3.0-generate / imagen-2.0 / gemini-2.0-flash-exp など
+  // Google 側の画像生成モデル名（環境により調整）
+  const model = "imagen-3.0-generate";
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateImage?key=${encodeURIComponent(
     GEMINI_API_KEY
   )}`;
 
   const body = {
-    // text_prompt のみ利用（ベースの要件はフロントの prompt に含まれる前提）
-    prompt: {
-      text: prompt,
-    },
-    // 追加のヒント等が必要ならここに付与可能
-    // safety_settings などは最小構成（必要に応じて拡張）
+    prompt: { text: prompt },
   };
 
-  const tries = 3; // 1回 + 2リトライ
+  const tries = 3;
   let lastError;
   for (let i = 0; i < tries; i++) {
     try {
@@ -83,9 +62,7 @@ async function generateImageWithGoogle(prompt) {
         url,
         {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
         },
         120000
@@ -101,10 +78,6 @@ async function generateImageWithGoogle(prompt) {
       }
 
       const json = await resp.json();
-      // 期待レスポンス例（API進化により差異あり）:
-      // {
-      //   "images": [{ "image": { "bytesBase64": "..." } }]
-      // }
       const b64 =
         json?.images?.[0]?.image?.bytesBase64 ||
         json?.image?.bytesBase64 ||
@@ -124,14 +97,13 @@ async function generateImageWithGoogle(prompt) {
       };
     } catch (e) {
       lastError = e;
-      // ネットワーク・一時失敗のみリトライ
       const retryable =
         e.name === "AbortError" ||
         e.code === "ECONNRESET" ||
         e.code === "ENOTFOUND" ||
         (typeof e.status === "number" && e.status >= 500);
       if (i < tries - 1 && retryable) {
-        await sleep(300 * Math.pow(2, i)); // 300ms, 600ms
+        await sleep(300 * Math.pow(2, i));
         continue;
       }
       break;
@@ -140,7 +112,7 @@ async function generateImageWithGoogle(prompt) {
   throw lastError || new Error("Unknown error on Google image generation");
 }
 
-// ---- フォールバック: プレースホルダ PNG（青丸）
+// ---- フォールバック（プレースホルダ画像：青丸）
 function placeholderPngDataUrl() {
   const svg = `
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024">
@@ -151,7 +123,17 @@ function placeholderPngDataUrl() {
   return `data:image/svg+xml;base64,${b64}`;
 }
 
-// ---- 疎通: セッション風トークンを返す（UIの「clientToken 取得」用）
+// ---- リクエスト簡易ログ
+app.use((req, res, next) => {
+  const start = Date.now();
+  res.on("finish", () => {
+    const elapsed = Date.now() - start;
+    console.log(`[req] ${req.method} ${req.path} ${res.statusCode} ${elapsed}ms`);
+  });
+  next();
+});
+
+// ---- 疎通用（clientToken風のダミーを返す）
 app.post("/api/create-session", async (req, res) => {
   try {
     const userId = (req.body && req.body.userId) || "stage-user";
@@ -164,7 +146,7 @@ app.post("/api/create-session", async (req, res) => {
   }
 });
 
-// ---- 画像生成: { prompt } を受け取り Google で生成、失敗時はプレースホルダ
+// ---- 画像生成API
 app.post("/api/generate-test-image", async (req, res) => {
   const start = Date.now();
   try {
@@ -186,7 +168,6 @@ app.post("/api/generate-test-image", async (req, res) => {
         status: apiErr.status,
         payload: apiErr.payload ? String(apiErr.payload).slice(0, 800) : undefined,
       });
-      // フォールバック（UIが全滅しないよう最低限のプレースホルダ）
       return res.json({
         dataUrl: placeholderPngDataUrl(),
         elapsed: Date.now() - start,
