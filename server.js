@@ -14,9 +14,9 @@ const app = express();
 app.use((req, _res, next) => { console.log(`[req] ${req.method} ${req.url}`); next(); });
 app.use(express.json());
 app.use(cors({ origin: process.env.ALLOWED_ORIGIN || "*" }));
-
+app.use(express.static("public"));
 // ───────────── ヘルス
-app.get("/", (_req, res) => res.type("text/plain").send("illustauto-backend: ok"));
+app.get("/health", (_req, res) => res.type("text/plain").send("illustauto-backend: ok"));
 
 // ───────────── 診断
 app.post("/debug/echo", (req, res) => res.json({ ok: true, body: req.body ?? null }));
