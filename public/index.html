@@ -1,15 +1,281 @@
 <!DOCTYPE html>
 <html lang="ja">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Illustauto テスト</title>
-  <style>body{font-family:system-ui;margin:0;padding:24px;background:#f8fafc}</style>
-</head>
-<body>
-  <h1>Illustauto テストページ（Railway配信）</h1>
-  <p>このページが表示されていれば、<code>public/index.html</code> の配信に成功しています。</p>
-  <p>ヘルスチェック： <a href="/health" target="_blank">/health</a></p>
-</body>
-</html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Illustauto Phase B（自動枚数・再生成・写真画質・具体要素プロンプト）</title>
+    <style>
+      :root { color-scheme: light; }
+      body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans JP", sans-serif; margin:0; padding:24px; background:#f8fafc; }
+      .wrap { max-width: 980px; margin: 0 auto; background:#fff; border-radius:12px; box-shadow:0 12px 32px rgba(15,23,42,.08); padding:24px; }
+      h1 { margin: 0 0 8px; font-size: 22px; }
+      p  { margin: 0 0 16px; color:#334155; }
+      .row { display:flex; gap:12px; align-items:center; flex-wrap: wrap; margin: 8px 0; }
+      label { min-width: 120px; color:#334155; }
+      input[type="text"] { width: 320px; padding: 8px 10px; border:1px solid #e2e8f0; border-radius:8px; font:14px system-ui; }
+      textarea { width: 100%; min-height: 140px; padding: 10px; border:1px solid #e2e8f0; border-radius:8px; font:14px system-ui; }
+      button { appearance:none; border:0; border-radius:10px; padding:10px 14px; background:#0ea5e9; color:#fff; font-weight:600; cursor:pointer; }
+      button:disabled { opacity:.5; cursor: default; }
+      .status { margin-top: 12px; padding: 12px 14px; border-radius: 8px; background: #eff6ff; color:#1e3a8a; white-space: pre-wrap; font: 14px/1.6 system-ui; }
+      .ok { background:#ecfdf5; color:#065f46; }
+      .error { background:#fef2f2; color:#991b1b; }
+      .imgbox { margin-top: 12px; display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:14px; }
+      .card { border:1px solid #e2e8f0; border-radius:12px; padding:10px; background:#fff; display:flex; flex-direction:column; }
+      .meta { font-size:12px; color:#64748b; margin:6px 0 8px; white-space:pre-wrap; }
+      img.preview { width: 100%; height: auto; border-radius: 8px; display:block; }
+      .actions { display:flex; gap:8px; margin-top:10px; }
+      .btn-dl { display:inline-block;background:#10b981;color:#fff;padding:8px 12px;border-radius:8px;text-decoration:none;font-weight:600; }
+      .btn-re { background:#6366f1; color:#fff; border-radius:8px; padding:8px 12px; font-weight:600; cursor:pointer; border:0; }
+      .muted { color:#64748b; font-size:12px; }
+      hr { margin:20px 0; border:none; border-top:1px solid #e2e8f0 }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h1>Illustauto（自動枚数・再生成・写真画質・具体要素プロンプト）</h1>
+      <p>本文の長さに応じて自動で 1〜5枚を生成します。人物は日本人、画像内に文字は入れません。デフォルトのテイストは <strong>写真画質</strong> です。</p>
 
+      <div class="row">
+        <label for="userId">ユーザーID（任意）</label>
+        <input id="userId" type="text" value="stage-user" />
+        <button id="btnToken">clientToken 取得</button>
+      </div>
+      <div id="statusToken" class="status">待機中…（「clientToken 取得」を押してください）</div>
+
+      <hr />
+
+      <div class="row">
+        <label for="article">本文（ブログ全体を貼り付け）</label>
+      </div>
+      <textarea id="article"># サンプル記事タイトル
+
+これはサンプル本文です。本文の長さに応じて自動で 1〜5枚を生成します（目安：200文字で1枚・最大5枚）。人物が登場する場合は日本人として描写し、画像内に文字は一切入れません。テイストは写真画質とします。同じような画像が続かないよう、各画像は本文中の「異なる具体要素」を主題にしてください。</textarea>
+
+      <div class="row">
+        <button id="btnGenerate">画像生成</button>
+        <span class="muted">※ 生成中はボタンが無効化され、完了後は「再生成」に変わります。</span>
+      </div>
+      <div id="statusGen" class="status">待機中…（「画像生成」を押してください）</div>
+
+      <div id="gallery" class="imgbox"></div>
+
+      <p class="muted" style="margin-top:16px;">成功時は Console にも詳細が出ます（Safari/Chrome → ⌘⌥I → Console）。</p>
+    </div>
+
+    <script>
+      const BACKEND = "https://illustauto-backend-production.up.railway.app";
+
+      const $userId = document.getElementById("userId");
+      const $btnToken = document.getElementById("btnToken");
+      const $statusToken = document.getElementById("statusToken");
+
+      const $article = document.getElementById("article");
+      const $btnGenerate = document.getElementById("btnGenerate");
+      const $statusGen = document.getElementById("statusGen");
+      const $gallery = document.getElementById("gallery");
+
+      let lastClientToken = null;
+
+      // --- clientToken 取得（OpenAI ChatKit の疎通確認用）
+      async function getToken() {
+        $btnToken.disabled = true;
+        $statusToken.classList.remove("ok","error");
+        $statusToken.textContent = "接続中…";
+        try {
+          const resp = await fetch(`${BACKEND}/api/create-session`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ userId: $userId.value || "stage-user" })
+          });
+          const data = await resp.json().catch(() => ({}));
+          if (resp.ok && data.clientToken) {
+            lastClientToken = data.clientToken;
+            $statusToken.classList.add("ok");
+            $statusToken.textContent = "接続OK：clientToken 取得に成功しました。";
+            console.log("[client] clientToken:", data.clientToken);
+          } else {
+            $statusToken.classList.add("error");
+            $statusToken.textContent = "接続エラー：clientToken が返りませんでした。\n" + JSON.stringify(data);
+            console.error("[client] error payload:", data);
+          }
+        } catch (e) {
+          $statusToken.classList.add("error");
+          $statusToken.textContent = "接続エラー：ネットワークまたはCORSで失敗。";
+          console.error("[client] fetch error:", e);
+        } finally {
+          $btnToken.disabled = false;
+        }
+      }
+
+      // --- 暫定分割：200文字ごと最大5
+      function splitIntoChunksAuto(text) {
+        const maxImages = 5;
+        const unit = 200;
+        const clean = (text || "").trim();
+        if (!clean) return [];
+        const chunks = [];
+        let i = 0;
+        while (i < clean.length && chunks.length < maxImages) {
+          const end = Math.min(i + unit, clean.length);
+          chunks.push(clean.slice(i, end));
+          i = end;
+        }
+        if (chunks.length === 0 && clean) chunks.push(clean);
+        return chunks;
+      }
+
+      // --- 具体要素抽出（簡易）：文単位に分割し、チャンク番号に応じて異なる文を採用
+      function pickSpecificSlice(text, idx) {
+        const sentences = (text || "")
+          .split(/(?<=[。！？\?\!])|\n+/g) // 句点・改行で分割
+          .map(s => s.trim())
+          .filter(s => s.length >= 8);
+        if (sentences.length === 0) return (text || "").slice(0, 150);
+        // 同じような画像ばかりにならないよう、idxでずらす
+        const s = sentences[idx % sentences.length];
+        return s.length > 240 ? s.slice(0, 240) + "…" : s;
+      }
+
+      // --- プロンプト構築：写真画質・ノーテキスト・日本人固定・具体要素主題化
+      function buildPromptFromChunk(chunkText, idx) {
+        const specific = pickSpecificSlice(chunkText, idx);
+        return [
+          "【要件】以下の具体的な内容に対応した、写真画質のリアルなイメージを1枚生成してください。",
+          "・画像内に文字/記号/看板の文字/透かしは一切入れない（NO TEXT, NO LETTERS, NO WATERMARKS）。",
+          "・人物が登場する場合は、日本人として自然な容姿で描写する（肌色・顔立ち・髪質など）。",
+          "・各画像は似通わないよう、本文の中の異なる具体要素を主題にする（この画像では下記の具体要素を主題に）。",
+          "・背景は本文の文脈に沿って自然に。過度に装飾的にしない。",
+          "",
+          "【この画像の主題（本文の具体要素）】",
+          specific,
+          "",
+          "【補足】光や質感は写実的。被写界深度や陰影は自然。ロゴ・テキスト要素は禁止。"
+        ].join("\n");
+      }
+
+      // --- カード（ダウンロード & 再生成）
+      function appendImageCard({ src, prompt, index }) {
+        const card = document.createElement("div");
+        card.className = "card";
+        card.dataset.prompt = prompt;
+        card.dataset.index = String(index);
+
+        const meta = document.createElement("div");
+        meta.className = "meta";
+        meta.textContent = `#${index + 1} / プロンプト（内部保持・非表示UI）`;
+
+        const img = new Image();
+        img.className = "preview";
+        img.src = src;
+
+        const actions = document.createElement("div");
+        actions.className = "actions";
+
+        const a = document.createElement("a");
+        a.href = src;
+        a.download = `illustauto_${Date.now()}_${index + 1}.png`;
+        a.textContent = "ダウンロード";
+        a.className = "btn-dl";
+
+        const re = document.createElement("button");
+        re.className = "btn-re";
+        re.textContent = "この画像を再生成";
+        re.addEventListener("click", async () => {
+          try {
+            re.disabled = true;
+            re.textContent = "再生成中…";
+            const resp = await fetch(`${BACKEND}/api/generate-test-image`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ prompt: card.dataset.prompt, provider: "google" }) // 写真画質等はプロンプトに含め済み
+            });
+            const data = await resp.json().catch(() => ({}));
+            if (resp.ok && (data.dataUrl || data.url)) {
+              const newSrc = data.dataUrl || data.url;
+              img.src = newSrc;
+              a.href = newSrc;
+              a.download = `illustauto_${Date.now()}_${index + 1}.png`;
+            } else {
+              alert("再生成エラー: " + JSON.stringify(data));
+              console.error("[client] regenerate error:", data);
+            }
+          } catch (e) {
+            alert("再生成エラー：ネットワークで失敗");
+            console.error("[client] regenerate fetch error:", e);
+          } finally {
+            re.disabled = false;
+            re.textContent = "この画像を再生成";
+          }
+        });
+
+        actions.appendChild(a);
+        actions.appendChild(re);
+        card.appendChild(meta);
+        card.appendChild(img);
+        card.appendChild(actions);
+        $gallery.appendChild(card);
+      }
+
+      // --- 本文 → 自動枚数で順次生成（Google固定）
+      async function generateAuto() {
+        const article = $article.value || "";
+        const chunks = splitIntoChunksAuto(article);
+
+        $statusGen.classList.remove("ok","error");
+        if (chunks.length === 0) {
+          $statusGen.classList.add("error");
+          $statusGen.textContent = "本文が空です。";
+          return;
+        }
+
+        const origLabel = $btnGenerate.textContent;
+        $btnGenerate.disabled = true;
+        $btnGenerate.textContent = "生成中…";
+
+        let success = 0;
+        try {
+          for (let idx = 0; idx < chunks.length; idx++) {
+            $statusGen.textContent = `生成中… (${idx + 1}/${chunks.length})`;
+
+            const prompt = buildPromptFromChunk(chunks[idx], idx);
+            const resp = await fetch(`${BACKEND}/api/generate-test-image`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ prompt, provider: "google" }) // Google（写真画質指示はプロンプト側で指定）
+            });
+            const data = await resp.json().catch(() => ({}));
+
+            if (resp.ok && (data.dataUrl || data.url)) {
+              success++;
+              const src = data.dataUrl || data.url;
+              appendImageCard({ src, prompt, index: idx });
+              console.log(`[client] generated #${idx + 1}`);
+            } else {
+              console.error(`[client] error on #${idx + 1}:`, data);
+            }
+          }
+
+          if (success > 0) {
+            $statusGen.classList.add("ok");
+            $statusGen.textContent = `生成完了：${success}枚を追加しました。`;
+          } else {
+            $statusGen.classList.add("error");
+            $statusGen.textContent = "生成エラー：1枚も生成できませんでした。";
+          }
+        } catch (e) {
+          $statusGen.classList.add("error");
+          $statusGen.textContent = "生成エラー：ネットワークで失敗。";
+          console.error("[client] generateAuto error:", e);
+        } finally {
+          $btnGenerate.disabled = false;
+          $btnGenerate.textContent = (success > 0) ? "再生成" : origLabel;
+        }
+      }
+
+      document.addEventListener("DOMContentLoaded", () => {
+        document.getElementById("btnToken").addEventListener("click", getToken);
+        document.getElementById("btnGenerate").addEventListener("click", generateAuto);
+      });
+    </script>
+  </body>
+</html>
