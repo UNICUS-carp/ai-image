@@ -1,15 +1,7 @@
-// server.js — 画像生成は Google / OpenAI 両対応（デフォルト Google）
-// Google:
-//  - "imagen-*"   -> :predict
-//  - "gemini-*-image*" -> :generateContent (inlineData PNG)
-// モデル名に "models/" が付いていても自動で外します。
-// 必須ENV（Railway Variables）:
-//   PROVIDER=google
-//   GEMINI_API_KEY=xxxxxxxxxxxxxxxx
-//   GOOGLE_IMAGE_MODEL=gemini-2.5-flash-image   ← 推奨。※ "models/" は付けないのが基本
-// 任意：ALLOWED_ORIGIN=https://あなたのフロント
-//
-// OpenAIを使わないなら OPENAI_API_KEY は不要。/api/create-session を使う時だけ必要。
+// server.js — Google画像生成メイン（OpenAIも残すが未使用可）
+// 必須ENV: PROVIDER=google, GEMINI_API_KEY, GOOGLE_IMAGE_MODEL
+// 例: GOOGLE_IMAGE_MODEL=gemini-2.5-flash-image  または  imagen-3.0-generate-002
+// ※ "models/" が付いていても自動で外します
 
 import express from "express";
 import cors from "cors";
@@ -22,10 +14,10 @@ app.use((req, _res, next) => { console.log(`[req] ${req.method} ${req.url}`); ne
 app.use(express.json());
 app.use(cors({ origin: process.env.ALLOWED_ORIGIN || "*" }));
 
-// ───────────── ヘルス
+// Health
 app.get("/", (_req, res) => res.type("text/plain").send("illustauto-backend: ok"));
 
-// ───────────── 設定見える化
+// Debug: 現在のルート判断
 app.get("/debug/config", (_req, res) => {
   const raw = (process.env.GOOGLE_IMAGE_MODEL || "").trim();
   const cleaned = cleanModelName(raw);
@@ -40,7 +32,7 @@ app.get("/debug/config", (_req, res) => {
   });
 });
 
-// ───────────── Google モデル一覧（確認用）
+// Google models list（接続確認）
 app.get("/debug/google-models", async (_req, res) => {
   try {
     const key = process.env.GEMINI_API_KEY;
@@ -57,36 +49,26 @@ app.get("/debug/google-models", async (_req, res) => {
   }
 });
 
-// ───────────── 画像生成
 const IMAGE_TIMEOUT_MS = Number(process.env.IMAGE_TIMEOUT_MS || 60000);
-const IMAGE_RETRIES = Number(process.env.IMAGE_RETRIES || 2); // 合計3回
+const IMAGE_RETRIES    = Number(process.env.IMAGE_RETRIES || 2); // 合計3回
 
 function getProvider(req) {
   const p = (req.body?.provider || process.env.PROVIDER || "").toString().toLowerCase();
   return p.startsWith("google") ? "google" : "openai";
 }
-
 function cleanModelName(val) {
-  // 先頭の "models/" を除去し、両端の空白も除去
-  const s = (val || "").trim().replace(/^models\//i, "");
-  return s;
+  return (val || "").trim().replace(/^models\//i, "");
 }
-
 function normalizedGoogleModel() {
-  const raw = process.env.GOOGLE_IMAGE_MODEL || "";
-  const cleaned = cleanModelName(raw);
-  return cleaned || "gemini-2.5-flash-image"; // デフォルト
+  const cleaned = cleanModelName(process.env.GOOGLE_IMAGE_MODEL || "");
+  return cleaned || "gemini-2.5-flash-image";
 }
-
-function isImagenModel(name) {
-  return /^imagen-/i.test(name);
-}
-function isGeminiImageModel(name) {
+function isImagenModel(name){ return /^imagen-/i.test(name || ""); }
+function isGeminiImageModel(name){
   const n = (name || "").toLowerCase();
   return n.includes("gemini") && n.includes("image");
 }
 
-// リトライ
 async function fetchWithRetries(doFetch, tryCount = IMAGE_RETRIES) {
   const start = Date.now();
   let lastErr = null;
@@ -130,11 +112,7 @@ async function openaiGenerate(prompt, timeoutMs) {
       "Content-Type": "application/json",
       Accept: "application/json",
     },
-    body: JSON.stringify({
-      model: process.env.IMAGE_MODEL || "gpt-image-1",
-      prompt,
-      size: "1024x1024",
-    }),
+    body: JSON.stringify({ model: process.env.IMAGE_MODEL || "gpt-image-1", prompt, size: "1024x1024" }),
     signal: controller.signal,
   }).catch(e => ({ __error: e }));
 
@@ -163,7 +141,7 @@ async function googleGenerate(prompt, timeoutMs) {
   console.log(`[gen] google model resolved = "${model}"`);
 
   if (isGeminiImageModel(model)) {
-    // ---- Gemini 画像: :generateContent（inlineData PNG）
+    // ---- Gemini 画像: generateContent（※ responseMimeTypeは付けない）
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
     const controller = new AbortController();
     const t = setTimeout(() => controller.abort(), timeoutMs);
@@ -176,8 +154,8 @@ async function googleGenerate(prompt, timeoutMs) {
         Accept: "application/json",
       },
       body: JSON.stringify({
-        contents: [{ role: "user", parts: [{ text: prompt }] }],
-        generationConfig: { responseMimeType: "image/png" }
+        contents: [{ role: "user", parts: [{ text: prompt }] }]
+        // generationConfig は指定しない（画像MIMEをここに置くと400）
       }),
       signal: controller.signal,
     }).catch(e => ({ __error: e }));
@@ -191,15 +169,22 @@ async function googleGenerate(prompt, timeoutMs) {
     }
 
     const data = await resp.json().catch(() => ({}));
-    const part =
-      data?.candidates?.[0]?.content?.parts?.find?.(p => p?.inlineData?.data) ||
-      data?.candidates?.[0]?.content?.parts?.[0];
-    const b64 = part?.inlineData?.data || null;
-    if (!b64) return { ok: false, status: 502, errText: "IMAGE_MISSING (no inlineData)" };
+    // 画像は inlineData.data (base64) で返ってくる想定
+    let b64 = null;
+    try {
+      const parts = data?.candidates?.[0]?.content?.parts || [];
+      for (const p of parts) {
+        if (p?.inlineData?.data && /^image\//.test(p?.inlineData?.mimeType || "")) {
+          b64 = p.inlineData.data;
+          break;
+        }
+      }
+    } catch {}
+    if (!b64) return { ok: false, status: 502, errText: "IMAGE_MISSING (no inlineData image)" };
     return { ok: true, data: { dataUrl: `data:image/png;base64,${b64}` }, route: "gemini:generateContent" };
   }
 
-  // ---- Imagen: :predict（imageBytes）
+  // ---- Imagen: predict（imageBytes）
   const imagenModel = model || "imagen-3.0-generate-002";
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${imagenModel}:predict`;
   const controller = new AbortController();
@@ -214,7 +199,7 @@ async function googleGenerate(prompt, timeoutMs) {
     },
     body: JSON.stringify({
       instances: [{ prompt }],
-      parameters: { sampleCount: 1 },
+      parameters: { sampleCount: 1 }
     }),
     signal: controller.signal,
   }).catch(e => ({ __error: e }));
@@ -225,7 +210,7 @@ async function googleGenerate(prompt, timeoutMs) {
   if (!resp.ok) {
     const errText = await resp.text().catch(() => "(no body)");
     return { ok: false, status: resp.status, errText };
-  }
+    }
 
   const data = await resp.json().catch(() => ({}));
   const bytes =
@@ -269,6 +254,5 @@ app.post("/api/generate-test-image", async (req, res) => {
   }
 });
 
-// ───────────── 起動
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`server listening on :${PORT}`));
