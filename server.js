@@ -1,8 +1,7 @@
-// server.js — ChatKit セッション(OpenAI) + 画像生成（OpenAI/Google自動切替）
-// ・Google: Imagen (Gemini API) 画像生成 → Base64応答対応
-// ・OpenAI: Images API（URL/B64の両方に対応）
-// ・診断APIあり（/debug/openai-ping, /debug/ip）
-// 参考: Google Imagen (Gemini API) docs https://ai.google.dev/gemini-api/docs/imagen
+// server.js — ChatKit セッション(OpenAI) + 画像生成（Google/OpenAI 切替）
+// Google: Imagen (Gemini API) は v1beta/images:generate を使用
+// OpenAI: Images API（URL/B64対応）
+// 診断APIあり（/debug/openai-ping, /debug/ip, /debug/google-models）
 
 import express from "express";
 import cors from "cors";
@@ -14,9 +13,9 @@ const app = express();
 app.use((req, _res, next) => { console.log(`[req] ${req.method} ${req.url}`); next(); });
 app.use(express.json());
 app.use(cors({ origin: process.env.ALLOWED_ORIGIN || "*" }));
-app.use(express.static("public"));
+
 // ───────────── ヘルス
-app.get("/health", (_req, res) => res.type("text/plain").send("illustauto-backend: ok"));
+app.get("/", (_req, res) => res.type("text/plain").send("illustauto-backend: ok"));
 
 // ───────────── 診断
 app.post("/debug/echo", (req, res) => res.json({ ok: true, body: req.body ?? null }));
@@ -41,6 +40,31 @@ app.get("/debug/ip", async (_req, res) => {
     res.json({ ip });
   } catch (e) {
     res.status(500).json({ error: String(e) });
+  }
+});
+
+// Google: 利用可能モデルの生ダンプ
+app.get("/debug/google-models", async (_req, res) => {
+  try {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) return res.status(500).json({ ok: false, error: "GEMINI_API_KEY not set" });
+    const t0 = Date.now();
+    const resp = await fetch("https://generativelanguage.googleapis.com/v1beta/models", {
+      headers: { "x-goog-api-key": apiKey, Accept: "application/json" },
+    });
+    const txt = await resp.text().catch(() => "(no body)");
+    res
+      .status(resp.status)
+      .type("application/json")
+      .send(
+        JSON.stringify(
+          { ok: resp.ok, status: resp.status, elapsed: Date.now() - t0, body: txt },
+          null,
+          2
+        )
+      );
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e) });
   }
 });
 
@@ -113,15 +137,13 @@ async function fetchWithRetries(doFetch, tryCount = IMAGE_RETRIES) {
     const label = `attempt ${attempt + 1}/${tryCount + 1}`;
     try {
       console.log(`[gen] ${label} → calling provider`);
-      const { ok, data, status, errText } = await doFetch(IMAGE_TIMEOUT_MS);
+      const { ok, data, status, errText, raw } = await doFetch(IMAGE_TIMEOUT_MS);
       if (ok) return { ok, data, attempt, elapsed: Date.now() - start };
-      // リトライ対象: 429/5xx とネットワークエラーは doFetch 側で errText を返す
       if (status && (status === 429 || (status >= 500 && status <= 599))) {
-        console.warn(`[gen] ${label} transient ${status}: ${errText?.slice?.(0, 180)}`);
+        console.warn(`[gen] ${label} transient ${status}: ${errText?.slice?.(0, 200)}`);
         lastErr = new Error(`status ${status}`);
       } else {
-        // 非リトライ
-        return { ok: false, status, errText, attempt, elapsed: Date.now() - start };
+        return { ok: false, status, errText, raw, attempt, elapsed: Date.now() - start };
       }
     } catch (e) {
       console.warn(`[gen] ${label} error:`, e?.name || e);
@@ -168,7 +190,6 @@ async function openaiGenerate(prompt, timeoutMs) {
   }
 
   const data = await resp.json().catch(() => ({}));
-  // url または b64_json
   const url = data?.data?.[0]?.url || null;
   const b64 = data?.data?.[0]?.b64_json || null;
   if (url) return { ok: true, data: { url } };
@@ -176,33 +197,31 @@ async function openaiGenerate(prompt, timeoutMs) {
   return { ok: false, status: 502, errText: "IMAGE_MISSING" };
 }
 
-// Google（Imagen）実装（AI Studio APIキーで Base64 応答）
-// Docs: REST sample shows :predict on imagen-4.0-generate-001 with x-goog-api-key header. :contentReference[oaicite:1]{index=1}
+// Google（Imagen）実装 — **v1beta/images:generate** を使用
 async function googleGenerate(prompt, timeoutMs) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) return { ok: false, status: 500, errText: "SERVER_NOT_CONFIGURED (GEMINI_API_KEY)" };
 
-  const model = process.env.GOOGLE_IMAGE_MODEL || "imagen-4.0-generate-001";
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:predict`;
+  const model = process.env.GOOGLE_IMAGE_MODEL || "imagen-3.0-generate-001";
+  const url = `https://generativelanguage.googleapis.com/v1beta/images:generate?key=${encodeURIComponent(apiKey)}`;
 
   const controller = new AbortController();
   const t = setTimeout(() => controller.abort(), timeoutMs);
 
+  const body = {
+    model,
+    prompt,
+    // 必要なら追加パラメータ（例：aspectRatio）をここに。
+    // aspectRatio: "1:1",
+  };
+
   const resp = await fetch(url, {
     method: "POST",
     headers: {
-      "x-goog-api-key": apiKey,
       "Content-Type": "application/json",
       Accept: "application/json",
     },
-    body: JSON.stringify({
-      instances: [{ prompt }],
-      parameters: {
-        sampleCount: 1,
-        // aspectRatio は要件: 1:1/16:9/9:16 を想定。必要なら body.size からマッピング可。
-        // aspectRatio: "1:1",
-      },
-    }),
+    body: JSON.stringify(body),
     signal: controller.signal,
   }).catch((e) => ({ __error: e }));
 
@@ -215,14 +234,23 @@ async function googleGenerate(prompt, timeoutMs) {
   }
 
   const data = await resp.json().catch(() => ({}));
-  // 応答形式（例）: { predictions: [ { generatedImages: [ { image: { imageBytes: "base64..." } } ] } ] }
-  const bytes =
-    data?.predictions?.[0]?.generatedImages?.[0]?.image?.imageBytes ||
+  // 公式応答例に合わせ、base64 バイト列を探す
+  // 例）{ images: [ { data: "base64..." } ] } または { predictions: [ { bytesBase64: "..." } ] } 等
+  const b64 =
+    data?.images?.[0]?.data ||
+    data?.predictions?.[0]?.bytesBase64 ||
     data?.generatedImages?.[0]?.image?.imageBytes ||
     null;
 
-  if (!bytes) return { ok: false, status: 502, errText: "IMAGE_MISSING (no imageBytes)" };
-  return { ok: true, data: { dataUrl: `data:image/png;base64,${bytes}` } };
+  if (!b64) {
+    return {
+      ok: false,
+      status: 502,
+      errText: "IMAGE_MISSING (no base64 field)",
+      raw: data,
+    };
+  }
+  return { ok: true, data: { dataUrl: `data:image/png;base64,${b64}` } };
 }
 
 app.post("/api/generate-test-image", async (req, res) => {
@@ -242,10 +270,11 @@ app.post("/api/generate-test-image", async (req, res) => {
       }
     };
 
-    const { ok, data, status, errText, attempt, elapsed } = await fetchWithRetries(doFetch);
+    const { ok, data, status, errText, raw, attempt, elapsed } = await fetchWithRetries(doFetch);
 
     if (!ok) {
       console.error("[gen] failed:", status, errText);
+      if (raw) console.error("[gen] raw:", JSON.stringify(raw).slice(0, 400));
       return res
         .status(status || 502)
         .json({ error: "IMAGE_API_FAILED", detail: errText, status: status || 502, attempt: (attempt ?? 0) + 1, elapsed });
