@@ -1,7 +1,5 @@
-// server.js — ChatKit セッション(OpenAI) + 画像生成（Google/OpenAI 切替）
-// Google: Imagen (Gemini API) は v1beta/images:generate を使用
-// OpenAI: Images API（URL/B64対応）
-// 診断APIあり（/debug/openai-ping, /debug/ip, /debug/google-models）
+// server.js — ChatKit セッション(OpenAI) + 画像生成（Google/OpenAI）
+// 重要: Google 画像モデルはアカウントによって使えるIDが違うため、models一覧から自動検出してフォールバックします。
 
 import express from "express";
 import cors from "cors";
@@ -56,13 +54,7 @@ app.get("/debug/google-models", async (_req, res) => {
     res
       .status(resp.status)
       .type("application/json")
-      .send(
-        JSON.stringify(
-          { ok: resp.ok, status: resp.status, elapsed: Date.now() - t0, body: txt },
-          null,
-          2
-        )
-      );
+      .send(JSON.stringify({ ok: resp.ok, status: resp.status, elapsed: Date.now() - t0, body: txt }, null, 2));
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e) });
   }
@@ -78,7 +70,6 @@ app.post("/api/create-session", async (req, res) => {
     if (!apiKey || !workflowId) {
       return res.status(500).json({ error: "SERVER_NOT_CONFIGURED" });
     }
-
     const baseUser = typeof req.body?.userId === "string" ? req.body.userId : "anon";
     const userId = `${baseUser}-${Math.random().toString(36).slice(2, 10)}`;
 
@@ -197,45 +188,77 @@ async function openaiGenerate(prompt, timeoutMs) {
   return { ok: false, status: 502, errText: "IMAGE_MISSING" };
 }
 
-// Google（Imagen）実装 — **v1beta/images:generate** を使用
-async function googleGenerate(prompt, timeoutMs) {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) return { ok: false, status: 500, errText: "SERVER_NOT_CONFIGURED (GEMINI_API_KEY)" };
+// ───────────── Google（Imagen/Gemini Images）実装
+// v1beta/images:generate を基本に、モデル404時は models 一覧から画像生成対応モデルを自動選択して再試行
+async function listGoogleModels(apiKey) {
+  const resp = await fetch("https://generativelanguage.googleapis.com/v1beta/models", {
+    headers: { "x-goog-api-key": apiKey, Accept: "application/json" },
+  });
+  const txt = await resp.text().catch(() => "{}");
+  try { return JSON.parse(txt); } catch { return { raw: txt }; }
+}
 
-  const model = process.env.GOOGLE_IMAGE_MODEL || "imagen-3.0-generate-001";
+function pickImageModelFromList(listJson) {
+  // 1) よく見る候補を優先
+  const preferred = [
+    "imagen-3.0-generate-001",
+    "imagen-3.0-fast-generate-001",
+    "imagegeneration@005",
+    "imagegeneration@004",
+    "imagegeneration@003",
+    "imagegeneration@002",
+  ];
+  const items = listJson?.models || listJson?.data || listJson?.items || [];
+
+  // name に含まれていたら即採択
+  for (const id of preferred) {
+    const hit = items.find((m) => (m.name || m.id || "").includes(id));
+    if (hit) return hit.name || hit.id;
+  }
+
+  // supportedGenerationMethods などの示唆から画像生成っぽいものを拾う
+  for (const m of items) {
+    const name = m.name || m.id || "";
+    const methods = m.supportedGenerationMethods || m.supported_generation_methods || [];
+    const desc = (m.description || "").toLowerCase();
+
+    const looksImagey =
+      /image|imagen|photo|imagegeneration/i.test(name) ||
+      methods.some((x) => /image|images|generate/i.test(String(x))) ||
+      /image/.test(desc);
+
+    if (looksImagey) return name;
+  }
+  return null;
+}
+
+async function googleImagesGenerate(apiKey, model, prompt, timeoutMs) {
   const url = `https://generativelanguage.googleapis.com/v1beta/images:generate?key=${encodeURIComponent(apiKey)}`;
-
   const controller = new AbortController();
   const t = setTimeout(() => controller.abort(), timeoutMs);
 
-  const body = {
-    model,
-    prompt,
-    // 必要なら追加パラメータ（例：aspectRatio）をここに。
-    // aspectRatio: "1:1",
-  };
+  const body = { model, prompt };
 
   const resp = await fetch(url, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "application/json",
-    },
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
     body: JSON.stringify(body),
     signal: controller.signal,
   }).catch((e) => ({ __error: e }));
 
   clearTimeout(t);
 
-  if (resp?.__error) return { ok: false, errText: String(resp.__error) };
+  if (resp?.__error) return { ok: false, status: 0, errText: String(resp.__error) };
+
+  const text = await resp.text().catch(() => "");
   if (!resp.ok) {
-    const errText = await resp.text().catch(() => "(no body)");
-    return { ok: false, status: resp.status, errText };
+    return { ok: false, status: resp.status, errText: text || "(no body)" };
   }
 
-  const data = await resp.json().catch(() => ({}));
-  // 公式応答例に合わせ、base64 バイト列を探す
-  // 例）{ images: [ { data: "base64..." } ] } または { predictions: [ { bytesBase64: "..." } ] } 等
+  // 可能性のあるパターンを網羅的に探す
+  let data;
+  try { data = JSON.parse(text); } catch { data = {}; }
+
   const b64 =
     data?.images?.[0]?.data ||
     data?.predictions?.[0]?.bytesBase64 ||
@@ -243,14 +266,34 @@ async function googleGenerate(prompt, timeoutMs) {
     null;
 
   if (!b64) {
-    return {
-      ok: false,
-      status: 502,
-      errText: "IMAGE_MISSING (no base64 field)",
-      raw: data,
-    };
+    return { ok: false, status: 502, errText: "IMAGE_MISSING (no base64 field)", raw: data };
   }
   return { ok: true, data: { dataUrl: `data:image/png;base64,${b64}` } };
+}
+
+async function googleGenerate(prompt, timeoutMs) {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) return { ok: false, status: 500, errText: "SERVER_NOT_CONFIGURED (GEMINI_API_KEY)" };
+
+  // 1) まず環境変数で指定があればそれを使う
+  const initialModel = (process.env.GOOGLE_IMAGE_MODEL || "").trim() || null;
+  if (initialModel) {
+    const r1 = await googleImagesGenerate(apiKey, initialModel, prompt, timeoutMs);
+    // 404 のときだけ自動検出に切り替える
+    if (r1.ok || r1.status !== 404) return r1;
+    console.warn("[google] specified model 404, fallback to autodetect");
+  }
+
+  // 2) 自動検出（ListModels）
+  const list = await listGoogleModels(apiKey);
+  const picked = pickImageModelFromList(list);
+
+  if (!picked) {
+    return { ok: false, status: 404, errText: "No usable image model found in your account.", raw: list };
+  }
+
+  console.log("[google] using model:", picked);
+  return await googleImagesGenerate(apiKey, picked, prompt, timeoutMs);
 }
 
 app.post("/api/generate-test-image", async (req, res) => {
@@ -274,7 +317,7 @@ app.post("/api/generate-test-image", async (req, res) => {
 
     if (!ok) {
       console.error("[gen] failed:", status, errText);
-      if (raw) console.error("[gen] raw:", JSON.stringify(raw).slice(0, 400));
+      if (raw) console.error("[gen] raw:", JSON.stringify(raw).slice(0, 600));
       return res
         .status(status || 502)
         .json({ error: "IMAGE_API_FAILED", detail: errText, status: status || 502, attempt: (attempt ?? 0) + 1, elapsed });
