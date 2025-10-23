@@ -152,32 +152,69 @@ async function generateImage(req, res) {
     }
 
     const data = await response.json();
-    console.log("[gen] Response structure:");
-    console.log(JSON.stringify(data, null, 2));
+    console.log("[gen] Full response keys:", Object.keys(data));
 
     // 画像データの抽出
     const candidate = data.candidates?.[0];
     console.log("[gen] Candidate exists:", !!candidate);
     
+    if (candidate) {
+      console.log("[gen] Candidate keys:", Object.keys(candidate));
+      console.log("[gen] Candidate.content:", candidate.content);
+    }
+    
     const parts = candidate?.content?.parts;
     console.log("[gen] Parts count:", parts?.length || 0);
     
-    const imagePart = parts?.find(p => p.inline_data?.mime_type?.startsWith("image/"));
+    if (parts && parts.length > 0) {
+      console.log("[gen] Parts structure:");
+      parts.forEach((part, idx) => {
+        console.log(`[gen]   Part ${idx}:`, Object.keys(part));
+        if (part.inline_data) {
+          console.log(`[gen]     - Has inline_data with keys:`, Object.keys(part.inline_data));
+        }
+        if (part.inlineData) {
+          console.log(`[gen]     - Has inlineData with keys:`, Object.keys(part.inlineData));
+        }
+        if (part.text) {
+          console.log(`[gen]     - Has text (length ${part.text.length})`);
+        }
+      });
+    }
+    
+    // 画像データを探す（複数のキー名を試す）
+    let imagePart = parts?.find(p => p.inline_data?.mime_type?.startsWith("image/"));
+    if (!imagePart) {
+      // inlineData（キャメルケース）も試す
+      imagePart = parts?.find(p => p.inlineData?.mimeType?.startsWith("image/"));
+    }
+    
     console.log("[gen] Image part found:", !!imagePart);
 
-    if (!imagePart?.inline_data?.data) {
+    if (!imagePart) {
       console.error("[gen] ERROR: No image data in response");
-      console.error("[gen] candidate:", candidate);
-      console.error("[gen] parts:", parts);
+      console.error("[gen] Full parts:", JSON.stringify(parts, null, 2));
       return res.status(500).json({
         error: "NO_IMAGE_DATA",
         message: "レスポンスに画像データが含まれていません",
-        response: data
+        parts: parts,
+        candidate: candidate
       });
     }
 
-    const imageData = imagePart.inline_data.data;
-    const mimeType = imagePart.inline_data.mime_type;
+    // 画像データとMIMEタイプを取得（スネークケースとキャメルケースの両方に対応）
+    const imageData = imagePart.inline_data?.data || imagePart.inlineData?.data;
+    const mimeType = imagePart.inline_data?.mime_type || imagePart.inlineData?.mimeType;
+    
+    if (!imageData) {
+      console.error("[gen] ERROR: Image part found but no data");
+      console.error("[gen] Image part structure:", JSON.stringify(imagePart, null, 2));
+      return res.status(500).json({
+        error: "NO_IMAGE_DATA",
+        message: "画像パートにデータが含まれていません",
+        imagePart: imagePart
+      });
+    }
     
     console.log("[gen] ✅ SUCCESS");
     console.log(`[gen] - Image generated with aspectRatio: ${aspectRatio}`);
