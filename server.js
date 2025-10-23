@@ -12,8 +12,7 @@ app.get("/debug/config", (req, res) => {
   res.json({
     NODE_ENV: process.env.NODE_ENV || "development",
     hasGeminiApiKey: !!(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY),
-    hasGoogleProjectId: !!process.env.GOOGLE_PROJECT_ID,
-    hasGoogleLocation: !!process.env.GOOGLE_LOCATION,
+    model: "gemini-2.5-flash-image",
   });
 });
 
@@ -31,7 +30,7 @@ app.post("/api/passkey-token", (req, res) => {
 });
 
 // ========================================
-// 画像生成（Google Imagen）
+// 画像生成（Gemini 2.5 Flash Image）
 // ========================================
 app.post("/api/generate-test-image", async (req, res) => {
   const { prompt, provider = "google", aspectRatio = "1:1" } = req.body;
@@ -54,63 +53,54 @@ app.post("/api/generate-test-image", async (req, res) => {
   }
 
   const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || "";
-  const GOOGLE_PROJECT_ID = process.env.GOOGLE_PROJECT_ID || "";
-  const GOOGLE_LOCATION = process.env.GOOGLE_LOCATION || "us-central1";
 
   if (!GEMINI_API_KEY) {
     console.error("[gen] ERROR: GEMINI_API_KEY not configured");
     return res.status(500).json({ error: "GEMINI_API_KEY not set" });
   }
 
-  // Google Imagen API 呼び出し
-  const modelName = "imagen-3.0-generate-002";
-  const googleUrl = GOOGLE_PROJECT_ID
-    ? `https://${GOOGLE_LOCATION}-aiplatform.googleapis.com/v1/projects/${GOOGLE_PROJECT_ID}/locations/${GOOGLE_LOCATION}/publishers/google/models/${modelName}:predict`
-    : `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:predict?key=${GEMINI_API_KEY}`;
+  // Gemini 2.5 Flash Image API
+  const modelName = "gemini-2.5-flash-image";
+  const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent`;
 
   console.log(`[gen] Using model: ${modelName}`);
-  console.log(`[gen] API endpoint: ${googleUrl.split('?')[0]}`);
+  console.log(`[gen] API endpoint: ${apiUrl}`);
 
-  const parameters = { sampleCount: 1 };
-  
-  // aspectRatio の検証と追加
-  const validAspectRatios = ["1:1", "3:4", "4:3", "9:16", "16:9"];
-  if (aspectRatio && validAspectRatios.includes(aspectRatio)) {
-    parameters.aspectRatio = aspectRatio;
-    console.log(`[gen] ✅ aspectRatio added to parameters: ${aspectRatio}`);
-  } else {
-    console.log(`[gen] ⚠️ Invalid or missing aspectRatio (${aspectRatio}), using default`);
-  }
-
+  // Gemini APIのリクエスト形式
   const requestBody = {
-    instances: [{ prompt }],
-    parameters: parameters
+    contents: [{
+      parts: [{
+        text: prompt
+      }]
+    }],
+    generationConfig: {
+      response_modalities: ["IMAGE"]
+    }
   };
 
-  console.log("[gen] Request body to Imagen API:");
+  // aspectRatio を image_config に追加
+  if (aspectRatio && aspectRatio !== "1:1") {
+    requestBody.generationConfig.image_config = {
+      aspect_ratio: aspectRatio
+    };
+    console.log(`[gen] ✅ aspectRatio added to image_config: ${aspectRatio}`);
+  } else {
+    console.log(`[gen] ℹ️ Using default aspect ratio (1:1)`);
+  }
+
+  console.log("[gen] Request body:");
   console.log(JSON.stringify(requestBody, null, 2));
 
   try {
-    const headers = { "Content-Type": "application/json" };
-    if (GOOGLE_PROJECT_ID) {
-      const { GoogleAuth } = await import("google-auth-library");
-      const auth = new GoogleAuth({ scopes: ["https://www.googleapis.com/auth/cloud-platform"] });
-      const client = await auth.getClient();
-      const token = await client.getAccessToken();
-      if (token.token) {
-        headers["Authorization"] = `Bearer ${token.token}`;
-      }
-    }
-
-    console.log("[gen] Sending request to Imagen API...");
+    console.log("[gen] Sending request to Gemini API...");
     const startTime = Date.now();
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 60000); // 60秒タイムアウト
+    const timeoutId = setTimeout(() => controller.abort(), 60000);
 
-    const response = await fetch(googleUrl, {
+    const response = await fetch(`${apiUrl}?key=${GEMINI_API_KEY}`, {
       method: "POST",
-      headers,
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(requestBody),
       signal: controller.signal,
     });
@@ -127,7 +117,7 @@ app.post("/api/generate-test-image", async (req, res) => {
       console.error(`[gen] Status: ${response.status}`);
       console.error(`[gen] Error body: ${errorText}`);
       return res.status(response.status).json({ 
-        error: "IMAGEN_API_ERROR", 
+        error: "GEMINI_API_ERROR", 
         status: response.status, 
         message: errorText 
       });
@@ -135,26 +125,41 @@ app.post("/api/generate-test-image", async (req, res) => {
 
     const data = await response.json();
     console.log("[gen] API response structure:");
-    console.log(`[gen] - predictions count: ${data.predictions?.length || 0}`);
+    console.log(`[gen] - candidates count: ${data.candidates?.length || 0}`);
 
-    if (!data.predictions || data.predictions.length === 0) {
-      console.error("[gen] ERROR: No predictions in response");
-      return res.status(500).json({ error: "NO_PREDICTIONS", message: "Imagen API returned no predictions" });
+    if (!data.candidates || data.candidates.length === 0) {
+      console.error("[gen] ERROR: No candidates in response");
+      return res.status(500).json({ error: "NO_CANDIDATES", message: "Gemini API returned no candidates" });
     }
 
-    const prediction = data.predictions[0];
-    if (!prediction.bytesBase64Encoded) {
-      console.error("[gen] ERROR: No bytesBase64Encoded in prediction");
+    const candidate = data.candidates[0];
+    if (!candidate.content || !candidate.content.parts) {
+      console.error("[gen] ERROR: No content.parts in candidate");
+      return res.status(500).json({ error: "NO_CONTENT_PARTS" });
+    }
+
+    // 画像データを探す
+    let imageData = null;
+    let mimeType = "image/png";
+
+    for (const part of candidate.content.parts) {
+      if (part.inlineData) {
+        imageData = part.inlineData.data;
+        mimeType = part.inlineData.mimeType || "image/png";
+        break;
+      }
+    }
+
+    if (!imageData) {
+      console.error("[gen] ERROR: No image data in response");
       return res.status(500).json({ error: "NO_IMAGE_DATA" });
     }
 
-    const base64Image = prediction.bytesBase64Encoded;
-    const mimeType = prediction.mimeType || "image/png";
-    const dataUrl = `data:${mimeType};base64,${base64Image}`;
+    const dataUrl = `data:${mimeType};base64,${imageData}`;
 
     console.log("[gen] ✅ SUCCESS");
     console.log(`[gen] - Image generated with aspectRatio: ${aspectRatio}`);
-    console.log(`[gen] - Image size: ${Math.round(base64Image.length / 1024)}KB`);
+    console.log(`[gen] - Image size: ${Math.round(imageData.length / 1024)}KB`);
     console.log(`[gen] - MIME type: ${mimeType}`);
     console.log("[gen] ===========================================");
 
@@ -174,4 +179,4 @@ app.post("/api/generate-test-image", async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`✅ Server listening on :${PORT}`));
+app.listen(PORT, () => console.log(`✅ Server listening on :${PORT} (Gemini 2.5 Flash Image)`));
