@@ -133,12 +133,12 @@ async function openaiGenerate(prompt, timeoutMs) {
 }
 
 // Google: 画像生成（モデル名でルート分岐）
-async function googleGenerate(prompt, timeoutMs) {
+async function googleGenerate(prompt, timeoutMs, aspectRatio = "1:1") {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) return { ok: false, status: 500, errText: "SERVER_NOT_CONFIGURED (GEMINI_API_KEY)" };
 
   const model = normalizedGoogleModel();
-  console.log(`[gen] google model resolved = "${model}"`);
+  console.log(`[gen] google model resolved = "${model}", aspectRatio = "${aspectRatio}"`);
 
   if (isGeminiImageModel(model)) {
     // ---- Gemini 画像: generateContent（※ responseMimeTypeは付けない）
@@ -190,6 +190,12 @@ async function googleGenerate(prompt, timeoutMs) {
   const controller = new AbortController();
   const t = setTimeout(() => controller.abort(), timeoutMs);
 
+  // aspectRatioをparametersに追加
+  const parameters = { sampleCount: 1 };
+  if (aspectRatio && ["1:1", "9:16", "16:9", "3:4", "4:3"].includes(aspectRatio)) {
+    parameters.aspectRatio = aspectRatio;
+  }
+
   const resp = await fetch(url, {
     method: "POST",
     headers: {
@@ -199,7 +205,7 @@ async function googleGenerate(prompt, timeoutMs) {
     },
     body: JSON.stringify({
       instances: [{ prompt }],
-      parameters: { sampleCount: 1 }
+      parameters: parameters
     }),
     signal: controller.signal,
   }).catch(e => ({ __error: e }));
@@ -230,9 +236,11 @@ app.post("/api/generate-test-image", async (req, res) => {
         ? req.body.prompt.trim()
         : "A simple blue circle icon on white background";
 
+    const aspectRatio = req.body?.aspectRatio || "1:1";
+
     const provider = getProvider(req);
     const doFetch = async (timeoutMs) => {
-      if (provider === "google") return await googleGenerate(prompt, timeoutMs);
+      if (provider === "google") return await googleGenerate(prompt, timeoutMs, aspectRatio);
       return await openaiGenerate(prompt, timeoutMs);
     };
 
@@ -245,7 +253,7 @@ app.post("/api/generate-test-image", async (req, res) => {
         .json({ error: "IMAGE_API_FAILED", detail: errText, status: status || 502, attempt: (attempt ?? 0) + 1, elapsed, route });
     }
 
-    console.log(`[gen] success by ${provider} via ${route} in ${elapsed}ms (attempt ${(attempt ?? 0) + 1})`);
+    console.log(`[gen] success by ${provider} via ${route} in ${elapsed}ms (attempt ${(attempt ?? 0) + 1}), aspectRatio: ${aspectRatio}`);
     return res.json({ ...data, provider, elapsed, attempt: (attempt ?? 0) + 1, route });
   } catch (e) {
     console.error("[gen] unexpected:", e);
