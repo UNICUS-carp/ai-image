@@ -1,266 +1,177 @@
-// server.js — Google画像生成メイン（OpenAIも残すが未使用可）
-// 必須ENV: PROVIDER=google, GEMINI_API_KEY, GOOGLE_IMAGE_MODEL
-// 例: GOOGLE_IMAGE_MODEL=gemini-2.5-flash-image  または  imagen-3.0-generate-002
-// ※ "models/" が付いていても自動で外します
-
 import express from "express";
 import cors from "cors";
-import dns from "dns";
-
-dns.setDefaultResultOrder("ipv4first");
 
 const app = express();
-app.use((req, _res, next) => { console.log(`[req] ${req.method} ${req.url}`); next(); });
-app.use(express.json());
-app.use(cors({ origin: process.env.ALLOWED_ORIGIN || "*" }));
+app.use(cors());
+app.use(express.json({ limit: "10mb" }));
 
-// Health
-app.get("/", (_req, res) => res.type("text/plain").send("illustauto-backend: ok"));
-
-// Debug: 現在のルート判断
-app.get("/debug/config", (_req, res) => {
-  const raw = (process.env.GOOGLE_IMAGE_MODEL || "").trim();
-  const cleaned = cleanModelName(raw);
+// ========================================
+// デバッグ用：設定確認
+// ========================================
+app.get("/debug/config", (req, res) => {
   res.json({
-    provider_env: process.env.PROVIDER || "(unset)",
-    google_image_model_env_raw: raw || "(unset)",
-    google_image_model_normalized: cleaned || "(default: gemini-2.5-flash-image)",
-    route_gemini_image: isGeminiImageModel(cleaned),
-    route_imagen: isImagenModel(cleaned),
-    has_gemini_key: Boolean(process.env.GEMINI_API_KEY),
-    allowed_origin: process.env.ALLOWED_ORIGIN || "*",
+    NODE_ENV: process.env.NODE_ENV || "development",
+    hasGoogleApiKey: !!process.env.GOOGLE_API_KEY,
+    hasGoogleProjectId: !!process.env.GOOGLE_PROJECT_ID,
+    hasGoogleLocation: !!process.env.GOOGLE_LOCATION,
   });
 });
 
-// Google models list（接続確認）
-app.get("/debug/google-models", async (_req, res) => {
-  try {
-    const key = process.env.GEMINI_API_KEY;
-    if (!key) return res.status(500).json({ error: "GEMINI_API_KEY missing" });
-    const t0 = Date.now();
-    const resp = await fetch("https://generativelanguage.googleapis.com/v1beta/models", {
-      headers: { "x-goog-api-key": key },
-    });
-    const elapsed = Date.now() - t0;
-    const body = await resp.text();
-    res.json({ ok: resp.ok, status: resp.status, elapsed, body });
-  } catch (e) {
-    res.status(500).json({ error: String(e) });
+// ========================================
+// Passkey トークン発行（ステージング用）
+// ========================================
+app.post("/api/passkey-token", (req, res) => {
+  const { userId } = req.body;
+  if (!userId) {
+    return res.status(400).json({ error: "userId is required" });
   }
+  const clientToken = `stage-token-${Date.now()}-${userId}`;
+  console.log(`[passkey] issued clientToken for userId=${userId} => ${clientToken}`);
+  return res.json({ clientToken });
 });
 
-const IMAGE_TIMEOUT_MS = Number(process.env.IMAGE_TIMEOUT_MS || 60000);
-const IMAGE_RETRIES    = Number(process.env.IMAGE_RETRIES || 2); // 合計3回
-
-function getProvider(req) {
-  const p = (req.body?.provider || process.env.PROVIDER || "").toString().toLowerCase();
-  return p.startsWith("google") ? "google" : "openai";
-}
-function cleanModelName(val) {
-  return (val || "").trim().replace(/^models\//i, "");
-}
-function normalizedGoogleModel() {
-  const cleaned = cleanModelName(process.env.GOOGLE_IMAGE_MODEL || "");
-  return cleaned || "gemini-2.5-flash-image";
-}
-function isImagenModel(name){ return /^imagen-/i.test(name || ""); }
-function isGeminiImageModel(name){
-  const n = (name || "").toLowerCase();
-  return n.includes("gemini") && n.includes("image");
-}
-
-async function fetchWithRetries(doFetch, tryCount = IMAGE_RETRIES) {
-  const start = Date.now();
-  let lastErr = null;
-  for (let attempt = 0; attempt <= tryCount; attempt++) {
-    const label = `attempt ${attempt + 1}/${tryCount + 1}`;
-    try {
-      console.log(`[gen] ${label} → call provider`);
-      const { ok, data, status, errText, route } = await doFetch(IMAGE_TIMEOUT_MS);
-      if (ok) return { ok, data, attempt, elapsed: Date.now() - start, route };
-      if (status && (status === 429 || (status >= 500 && status <= 599))) {
-        console.warn(`[gen] ${label} transient ${status}: ${String(errText).slice(0, 200)}`);
-        lastErr = new Error(`status ${status}`);
-      } else {
-        return { ok: false, status, errText, attempt, elapsed: Date.now() - start, route };
-      }
-    } catch (e) {
-      console.warn(`[gen] ${label} error:`, e?.name || e);
-      lastErr = e;
-    }
-    const backoff = attempt === 0 ? 0 : attempt === 1 ? 2000 : 5000;
-    if (attempt < tryCount) {
-      console.log(`[gen] waiting ${backoff}ms before retry...`);
-      await new Promise(r => setTimeout(r, backoff));
-    }
-  }
-  throw lastErr || new Error("ALL_RETRIES_FAILED");
-}
-
-// OpenAI（未使用ならキー不要）
-async function openaiGenerate(prompt, timeoutMs) {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) return { ok: false, status: 500, errText: "SERVER_NOT_CONFIGURED (OPENAI_API_KEY)" };
-
-  const controller = new AbortController();
-  const t = setTimeout(() => controller.abort(), timeoutMs);
-
-  const resp = await fetch("https://api.openai.com/v1/images/generations", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-      Accept: "application/json",
-    },
-    body: JSON.stringify({ model: process.env.IMAGE_MODEL || "gpt-image-1", prompt, size: "1024x1024" }),
-    signal: controller.signal,
-  }).catch(e => ({ __error: e }));
-
-  clearTimeout(t);
-
-  if (resp?.__error) return { ok: false, errText: String(resp.__error) };
-  if (!resp.ok) {
-    const errText = await resp.text().catch(() => "(no body)");
-    return { ok: false, status: resp.status, errText };
-  }
-
-  const data = await resp.json().catch(() => ({}));
-  const url = data?.data?.[0]?.url || null;
-  const b64 = data?.data?.[0]?.b64_json || null;
-  if (url) return { ok: true, data: { url }, route: "openai:url" };
-  if (b64) return { ok: true, data: { dataUrl: `data:image/png;base64,${b64}` }, route: "openai:b64" };
-  return { ok: false, status: 502, errText: "IMAGE_MISSING" };
-}
-
-// Google: 画像生成（モデル名でルート分岐）
-async function googleGenerate(prompt, timeoutMs, aspectRatio = "1:1") {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) return { ok: false, status: 500, errText: "SERVER_NOT_CONFIGURED (GEMINI_API_KEY)" };
-
-  const model = normalizedGoogleModel();
-  console.log(`[gen] google model resolved = "${model}", aspectRatio = "${aspectRatio}"`);
-
-  if (isGeminiImageModel(model)) {
-    // ---- Gemini 画像: generateContent（※ responseMimeTypeは付けない）
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
-    const controller = new AbortController();
-    const t = setTimeout(() => controller.abort(), timeoutMs);
-
-    const resp = await fetch(url, {
-      method: "POST",
-      headers: {
-        "x-goog-api-key": apiKey,
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
-      body: JSON.stringify({
-        contents: [{ role: "user", parts: [{ text: prompt }] }]
-        // generationConfig は指定しない（画像MIMEをここに置くと400）
-      }),
-      signal: controller.signal,
-    }).catch(e => ({ __error: e }));
-
-    clearTimeout(t);
-
-    if (resp?.__error) return { ok: false, errText: String(resp.__error) };
-    if (!resp.ok) {
-      const errText = await resp.text().catch(() => "(no body)");
-      return { ok: false, status: resp.status, errText };
-    }
-
-    const data = await resp.json().catch(() => ({}));
-    // 画像は inlineData.data (base64) で返ってくる想定
-    let b64 = null;
-    try {
-      const parts = data?.candidates?.[0]?.content?.parts || [];
-      for (const p of parts) {
-        if (p?.inlineData?.data && /^image\//.test(p?.inlineData?.mimeType || "")) {
-          b64 = p.inlineData.data;
-          break;
-        }
-      }
-    } catch {}
-    if (!b64) return { ok: false, status: 502, errText: "IMAGE_MISSING (no inlineData image)" };
-    return { ok: true, data: { dataUrl: `data:image/png;base64,${b64}` }, route: "gemini:generateContent" };
-  }
-
-  // ---- Imagen: predict（imageBytes）
-  const imagenModel = model || "imagen-3.0-generate-002";
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${imagenModel}:predict`;
-  const controller = new AbortController();
-  const t = setTimeout(() => controller.abort(), timeoutMs);
-
-  // aspectRatioをparametersに追加
-  const parameters = { sampleCount: 1 };
-  if (aspectRatio && ["1:1", "9:16", "16:9", "3:4", "4:3"].includes(aspectRatio)) {
-    parameters.aspectRatio = aspectRatio;
-  }
-
-  const resp = await fetch(url, {
-    method: "POST",
-    headers: {
-      "x-goog-api-key": apiKey,
-      "Content-Type": "application/json",
-      Accept: "application/json",
-    },
-    body: JSON.stringify({
-      instances: [{ prompt }],
-      parameters: parameters
-    }),
-    signal: controller.signal,
-  }).catch(e => ({ __error: e }));
-
-  clearTimeout(t);
-
-  if (resp?.__error) return { ok: false, errText: String(resp.__error) };
-  if (!resp.ok) {
-    const errText = await resp.text().catch(() => "(no body)");
-    return { ok: false, status: resp.status, errText };
-    }
-
-  const data = await resp.json().catch(() => ({}));
-  const bytes =
-    data?.predictions?.[0]?.generatedImages?.[0]?.image?.imageBytes ||
-    data?.generatedImages?.[0]?.image?.imageBytes ||
-    null;
-
-  if (!bytes) return { ok: false, status: 502, errText: "IMAGE_MISSING (no imageBytes)" };
-  return { ok: true, data: { dataUrl: `data:image/png;base64,${bytes}` }, route: "imagen:predict" };
-}
-
+// ========================================
+// 画像生成（Google Imagen）
+// ========================================
 app.post("/api/generate-test-image", async (req, res) => {
-  console.log("[gen] start");
+  const { prompt, provider = "google", aspectRatio = "1:1" } = req.body;
+  
+  console.log("[gen] ===========================================");
+  console.log("[gen] Request received:");
+  console.log(`[gen] - prompt length: ${prompt?.length || 0} characters`);
+  console.log(`[gen] - provider: ${provider}`);
+  console.log(`[gen] - aspectRatio: ${aspectRatio}`);
+  console.log("[gen] ===========================================");
+
+  if (!prompt) {
+    console.error("[gen] ERROR: No prompt provided");
+    return res.status(400).json({ error: "NO_PROMPT" });
+  }
+
+  if (provider !== "google") {
+    console.error(`[gen] ERROR: Unsupported provider: ${provider}`);
+    return res.status(400).json({ error: "UNSUPPORTED_PROVIDER", message: `Provider '${provider}' not supported. Use 'google'.` });
+  }
+
+  const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY || "";
+  const GOOGLE_PROJECT_ID = process.env.GOOGLE_PROJECT_ID || "";
+  const GOOGLE_LOCATION = process.env.GOOGLE_LOCATION || "us-central1";
+
+  if (!GOOGLE_API_KEY) {
+    console.error("[gen] ERROR: GOOGLE_API_KEY not configured");
+    return res.status(500).json({ error: "GOOGLE_API_KEY not set" });
+  }
+
+  // Google Imagen API 呼び出し
+  const modelName = "imagen-3.0-generate-002";
+  const googleUrl = GOOGLE_PROJECT_ID
+    ? `https://${GOOGLE_LOCATION}-aiplatform.googleapis.com/v1/projects/${GOOGLE_PROJECT_ID}/locations/${GOOGLE_LOCATION}/publishers/google/models/${modelName}:predict`
+    : `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:predict?key=${GOOGLE_API_KEY}`;
+
+  console.log(`[gen] Using model: ${modelName}`);
+  console.log(`[gen] API endpoint: ${googleUrl.split('?')[0]}`);
+
+  const parameters = { sampleCount: 1 };
+  
+  // aspectRatio の検証と追加
+  const validAspectRatios = ["1:1", "3:4", "4:3", "9:16", "16:9"];
+  if (aspectRatio && validAspectRatios.includes(aspectRatio)) {
+    parameters.aspectRatio = aspectRatio;
+    console.log(`[gen] ✅ aspectRatio added to parameters: ${aspectRatio}`);
+  } else {
+    console.log(`[gen] ⚠️ Invalid or missing aspectRatio (${aspectRatio}), using default`);
+  }
+
+  const requestBody = {
+    instances: [{ prompt }],
+    parameters: parameters
+  };
+
+  console.log("[gen] Request body to Imagen API:");
+  console.log(JSON.stringify(requestBody, null, 2));
+
   try {
-    const prompt =
-      typeof req.body?.prompt === "string" && req.body.prompt.trim()
-        ? req.body.prompt.trim()
-        : "A simple blue circle icon on white background";
-
-    const aspectRatio = req.body?.aspectRatio || "1:1";
-
-    const provider = getProvider(req);
-    const doFetch = async (timeoutMs) => {
-      if (provider === "google") return await googleGenerate(prompt, timeoutMs, aspectRatio);
-      return await openaiGenerate(prompt, timeoutMs);
-    };
-
-    const { ok, data, status, errText, attempt, elapsed, route } = await fetchWithRetries(doFetch);
-
-    if (!ok) {
-      console.error("[gen] failed:", status, errText, "route:", route);
-      return res
-        .status(status || 502)
-        .json({ error: "IMAGE_API_FAILED", detail: errText, status: status || 502, attempt: (attempt ?? 0) + 1, elapsed, route });
+    const headers = { "Content-Type": "application/json" };
+    if (GOOGLE_PROJECT_ID) {
+      const { GoogleAuth } = await import("google-auth-library");
+      const auth = new GoogleAuth({ scopes: ["https://www.googleapis.com/auth/cloud-platform"] });
+      const client = await auth.getClient();
+      const token = await client.getAccessToken();
+      if (token.token) {
+        headers["Authorization"] = `Bearer ${token.token}`;
+      }
     }
 
-    console.log(`[gen] success by ${provider} via ${route} in ${elapsed}ms (attempt ${(attempt ?? 0) + 1}), aspectRatio: ${aspectRatio}`);
-    return res.json({ ...data, provider, elapsed, attempt: (attempt ?? 0) + 1, route });
+    console.log("[gen] Sending request to Imagen API...");
+    const startTime = Date.now();
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 60000); // 60秒タイムアウト
+
+    const response = await fetch(googleUrl, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(requestBody),
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeoutId);
+    const elapsed = Date.now() - startTime;
+
+    console.log(`[gen] Response received in ${elapsed}ms`);
+    console.log(`[gen] HTTP Status: ${response.status}`);
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error("[gen] ERROR: API returned non-OK status");
+      console.error(`[gen] Status: ${response.status}`);
+      console.error(`[gen] Error body: ${errorText}`);
+      return res.status(response.status).json({ 
+        error: "IMAGEN_API_ERROR", 
+        status: response.status, 
+        message: errorText 
+      });
+    }
+
+    const data = await response.json();
+    console.log("[gen] API response structure:");
+    console.log(`[gen] - predictions count: ${data.predictions?.length || 0}`);
+
+    if (!data.predictions || data.predictions.length === 0) {
+      console.error("[gen] ERROR: No predictions in response");
+      return res.status(500).json({ error: "NO_PREDICTIONS", message: "Imagen API returned no predictions" });
+    }
+
+    const prediction = data.predictions[0];
+    if (!prediction.bytesBase64Encoded) {
+      console.error("[gen] ERROR: No bytesBase64Encoded in prediction");
+      return res.status(500).json({ error: "NO_IMAGE_DATA" });
+    }
+
+    const base64Image = prediction.bytesBase64Encoded;
+    const mimeType = prediction.mimeType || "image/png";
+    const dataUrl = `data:${mimeType};base64,${base64Image}`;
+
+    console.log("[gen] ✅ SUCCESS");
+    console.log(`[gen] - Image generated with aspectRatio: ${aspectRatio}`);
+    console.log(`[gen] - Image size: ${Math.round(base64Image.length / 1024)}KB`);
+    console.log(`[gen] - MIME type: ${mimeType}`);
+    console.log("[gen] ===========================================");
+
+    return res.json({
+      dataUrl,
+      provider: "google",
+      model: modelName,
+      aspectRatio: aspectRatio,
+      elapsed,
+    });
+
   } catch (e) {
-    console.error("[gen] unexpected:", e);
-    const msg = e?.name === "AbortError" ? "AbortError: timeout" : String(e?.message || e);
+    console.error("[gen] EXCEPTION:", e);
+    const msg = e?.name === "AbortError" ? "Request timeout (60s)" : String(e?.message || e);
     return res.status(500).json({ error: "UNEXPECTED", message: msg });
   }
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`server listening on :${PORT}`));
+app.listen(PORT, () => console.log(`✅ Server listening on :${PORT}`));
