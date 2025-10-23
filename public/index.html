@@ -47,19 +47,17 @@
       <div class="row">
         <label for="article">本文（ブログ全体を貼り付け）</label>
       </div>
-      <textarea id="article"># サンプル記事タイトル
-
+      <textarea id="article">
 本文の内容に応じて自動で画像を1〜5枚を生成します。</textarea>
 
       <div class="row">
         <button id="btnGenerate">画像生成</button>
-        <span class="muted">※ 生成中はボタンが無効化され、完了後は「再生成」に変わります。</span>
+        <span class="muted">※ 完了後「再生成」に変わります。</span>
       </div>
       <div id="statusGen" class="status">待機中…（「画像生成」を押してください）</div>
 
       <div id="gallery" class="imgbox"></div>
 
-      <p class="muted" style="margin-top:16px;">成功時は Console にも詳細が出ます（Safari/Chrome → ⌘⌥I → Console）。</p>
     </div>
 
     <script>
