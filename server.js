@@ -5,6 +5,8 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: "10mb" }));
 
+const MAX_CONTENT_LENGTH = 5000;
+
 // ========================================
 // デバッグ用：設定確認
 // ========================================
@@ -13,6 +15,7 @@ app.get("/debug/config", (req, res) => {
     NODE_ENV: process.env.NODE_ENV || "development",
     hasGeminiApiKey: !!(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY),
     model: "gemini-2.5-flash-image",
+    maxContentLength: MAX_CONTENT_LENGTH
   });
 });
 
@@ -42,21 +45,43 @@ app.post("/api/generate-test-image", async (req, res) => {
   console.log(`[gen] - aspectRatio: ${aspectRatio}`);
   console.log("[gen] ===========================================");
 
+  // プロンプトの存在チェック
   if (!prompt) {
     console.error("[gen] ERROR: No prompt provided");
-    return res.status(400).json({ error: "NO_PROMPT" });
+    return res.status(400).json({ 
+      error: "NO_PROMPT",
+      message: "プロンプトが指定されていません"
+    });
   }
 
+  // 文字数チェック
+  if (prompt.length > MAX_CONTENT_LENGTH) {
+    console.error(`[gen] ERROR: Prompt too long (${prompt.length} > ${MAX_CONTENT_LENGTH})`);
+    return res.status(400).json({
+      error: "PROMPT_TOO_LONG",
+      message: `プロンプトが長すぎます（${prompt.length}文字 > ${MAX_CONTENT_LENGTH}文字）`,
+      currentLength: prompt.length,
+      maxLength: MAX_CONTENT_LENGTH
+    });
+  }
+
+  // プロバイダーチェック
   if (provider !== "google") {
     console.error(`[gen] ERROR: Unsupported provider: ${provider}`);
-    return res.status(400).json({ error: "UNSUPPORTED_PROVIDER", message: `Provider '${provider}' not supported. Use 'google'.` });
+    return res.status(400).json({ 
+      error: "UNSUPPORTED_PROVIDER", 
+      message: `プロバイダー '${provider}' はサポートされていません。'google' を使用してください。`
+    });
   }
 
   const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || "";
 
   if (!GEMINI_API_KEY) {
     console.error("[gen] ERROR: GEMINI_API_KEY not configured");
-    return res.status(500).json({ error: "GEMINI_API_KEY not set" });
+    return res.status(500).json({ 
+      error: "API_KEY_NOT_SET",
+      message: "GEMINI_API_KEYが設定されていません"
+    });
   }
 
   // Gemini 2.5 Flash Image API
@@ -96,87 +121,96 @@ app.post("/api/generate-test-image", async (req, res) => {
     const startTime = Date.now();
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 60000);
+    const timeout = setTimeout(() => controller.abort(), 60000); // 60秒タイムアウト
 
     const response = await fetch(`${apiUrl}?key=${GEMINI_API_KEY}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json"
+      },
       body: JSON.stringify(requestBody),
-      signal: controller.signal,
+      signal: controller.signal
     });
 
-    clearTimeout(timeoutId);
-    const elapsed = Date.now() - startTime;
+    clearTimeout(timeout);
 
+    const elapsed = Date.now() - startTime;
     console.log(`[gen] Response received in ${elapsed}ms`);
-    console.log(`[gen] HTTP Status: ${response.status}`);
 
     if (!response.ok) {
       const errorText = await response.text();
       console.error("[gen] ERROR: API returned non-OK status");
       console.error(`[gen] Status: ${response.status}`);
-      console.error(`[gen] Error body: ${errorText}`);
-      return res.status(response.status).json({ 
-        error: "GEMINI_API_ERROR", 
-        status: response.status, 
-        message: errorText 
+      console.error(`[gen] Response: ${errorText}`);
+      
+      return res.status(response.status).json({
+        error: "API_ERROR",
+        message: "Gemini APIからエラーが返されました",
+        status: response.status,
+        details: errorText
       });
     }
 
     const data = await response.json();
-    console.log("[gen] API response structure:");
-    console.log(`[gen] - candidates count: ${data.candidates?.length || 0}`);
+    console.log("[gen] Response structure:");
+    console.log(JSON.stringify(data, null, 2));
 
-    if (!data.candidates || data.candidates.length === 0) {
-      console.error("[gen] ERROR: No candidates in response");
-      return res.status(500).json({ error: "NO_CANDIDATES", message: "Gemini API returned no candidates" });
-    }
+    // 画像データの抽出
+    const candidate = data.candidates?.[0];
+    const parts = candidate?.content?.parts;
+    const imagePart = parts?.find(p => p.inline_data?.mime_type?.startsWith("image/"));
 
-    const candidate = data.candidates[0];
-    if (!candidate.content || !candidate.content.parts) {
-      console.error("[gen] ERROR: No content.parts in candidate");
-      return res.status(500).json({ error: "NO_CONTENT_PARTS" });
-    }
-
-    // 画像データを探す
-    let imageData = null;
-    let mimeType = "image/png";
-
-    for (const part of candidate.content.parts) {
-      if (part.inlineData) {
-        imageData = part.inlineData.data;
-        mimeType = part.inlineData.mimeType || "image/png";
-        break;
-      }
-    }
-
-    if (!imageData) {
+    if (!imagePart?.inline_data?.data) {
       console.error("[gen] ERROR: No image data in response");
-      return res.status(500).json({ error: "NO_IMAGE_DATA" });
+      return res.status(500).json({
+        error: "NO_IMAGE_DATA",
+        message: "レスポンスに画像データが含まれていません",
+        response: data
+      });
     }
 
-    const dataUrl = `data:${mimeType};base64,${imageData}`;
-
+    const imageData = imagePart.inline_data.data;
+    const mimeType = imagePart.inline_data.mime_type;
+    
     console.log("[gen] ✅ SUCCESS");
     console.log(`[gen] - Image generated with aspectRatio: ${aspectRatio}`);
-    console.log(`[gen] - Image size: ${Math.round(imageData.length / 1024)}KB`);
     console.log(`[gen] - MIME type: ${mimeType}`);
-    console.log("[gen] ===========================================");
+    console.log(`[gen] - Image data length: ${imageData.length}`);
+
+    // Base64データURLとして返す
+    const dataUrl = `data:${mimeType};base64,${imageData}`;
 
     return res.json({
       dataUrl,
+      url: dataUrl,
       provider: "google",
       model: modelName,
-      aspectRatio: aspectRatio,
       elapsed,
+      aspectRatio,
+      mimeType
     });
 
-  } catch (e) {
-    console.error("[gen] EXCEPTION:", e);
-    const msg = e?.name === "AbortError" ? "Request timeout (60s)" : String(e?.message || e);
-    return res.status(500).json({ error: "UNEXPECTED", message: msg });
+  } catch (err) {
+    console.error("[gen] ERROR: Unexpected error");
+    console.error(err);
+
+    if (err.name === "AbortError") {
+      return res.status(408).json({
+        error: "TIMEOUT",
+        message: "リクエストがタイムアウトしました"
+      });
+    }
+
+    return res.status(500).json({
+      error: "UNEXPECTED_ERROR",
+      message: "予期しないエラーが発生しました",
+      details: err.message
+    });
   }
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`✅ Server listening on :${PORT} (Gemini 2.5 Flash Image)`));
+app.listen(PORT, () => {
+  console.log(`🚀 Server listening on port ${PORT}`);
+  console.log(`📏 Max content length: ${MAX_CONTENT_LENGTH} characters`);
+});
