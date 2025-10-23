@@ -11,7 +11,7 @@ app.use(express.json({ limit: "10mb" }));
 app.get("/debug/config", (req, res) => {
   res.json({
     NODE_ENV: process.env.NODE_ENV || "development",
-    hasGoogleApiKey: !!process.env.GOOGLE_API_KEY,
+    hasGeminiApiKey: !!(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY),
     hasGoogleProjectId: !!process.env.GOOGLE_PROJECT_ID,
     hasGoogleLocation: !!process.env.GOOGLE_LOCATION,
   });
@@ -53,20 +53,20 @@ app.post("/api/generate-test-image", async (req, res) => {
     return res.status(400).json({ error: "UNSUPPORTED_PROVIDER", message: `Provider '${provider}' not supported. Use 'google'.` });
   }
 
-  const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY || "";
+  const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || "";
   const GOOGLE_PROJECT_ID = process.env.GOOGLE_PROJECT_ID || "";
   const GOOGLE_LOCATION = process.env.GOOGLE_LOCATION || "us-central1";
 
-  if (!GOOGLE_API_KEY) {
-    console.error("[gen] ERROR: GOOGLE_API_KEY not configured");
-    return res.status(500).json({ error: "GOOGLE_API_KEY not set" });
+  if (!GEMINI_API_KEY) {
+    console.error("[gen] ERROR: GEMINI_API_KEY not configured");
+    return res.status(500).json({ error: "GEMINI_API_KEY not set" });
   }
 
   // Google Imagen API 呼び出し
   const modelName = "imagen-3.0-generate-002";
   const googleUrl = GOOGLE_PROJECT_ID
     ? `https://${GOOGLE_LOCATION}-aiplatform.googleapis.com/v1/projects/${GOOGLE_PROJECT_ID}/locations/${GOOGLE_LOCATION}/publishers/google/models/${modelName}:predict`
-    : `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:predict?key=${GOOGLE_API_KEY}`;
+    : `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:predict?key=${GEMINI_API_KEY}`;
 
   console.log(`[gen] Using model: ${modelName}`);
   console.log(`[gen] API endpoint: ${googleUrl.split('?')[0]}`);
