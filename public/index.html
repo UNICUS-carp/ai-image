@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="ja">
   <head>
@@ -415,7 +416,21 @@
           "- Japanese people with natural Japanese features (skin tone, facial structure, hair)",
           "- Absolutely NO TEXT, NO LETTERS, NO SIGNS, NO WATERMARKS in the image",
           "- Natural and contextually appropriate background",
-          "- Authentic photographic composition and color grading"
+          "- Authentic photographic composition and color grading",
+          "",
+          "【Anatomical Accuracy - MANDATORY】",
+          "- EXACTLY 2 arms per person (left arm and right arm only)",
+          "- EXACTLY 2 legs per person (left leg and right leg only)",
+          "- EXACTLY 5 fingers on each hand (thumb, index, middle, ring, pinky)",
+          "- Normal human body proportions and structure",
+          "- No extra limbs, no missing limbs, no deformed body parts",
+          "",
+          "【Cultural Accuracy for Japan - MANDATORY】",
+          "- Indoor scenes: People MUST be barefoot, wearing socks, or wearing indoor slippers (no outdoor shoes inside)",
+          "- Yoga/exercise mats: Only used indoors on wooden floors or tatami, NEVER outdoors on ground/grass",
+          "- Remove outdoor shoes at entrance (genkan) when entering homes",
+          "- Tatami rooms: Always barefoot or wearing socks only, no slippers",
+          "- Follow Japanese customs and daily life practices accurately"
         ].join("\n");
       }
 
@@ -430,7 +445,7 @@
 
         const meta = document.createElement("div");
         meta.className = "meta";
-        meta.textContent = `#${index + 1} | ${variantInfo.shot} | ${variantInfo.lighting}`;
+        meta.textContent = `#${index + 1}`;
 
         const img = new Image();
         img.className = "preview";
@@ -469,7 +484,7 @@
               img.src = newSrc;
               a.href = newSrc;
               a.download = `illustauto_${Date.now()}_${index + 1}.png`;
-              meta.textContent = `#${index + 1} | ${newVariant.shot} | ${newVariant.lighting}`;
+              meta.textContent = `#${index + 1}`;
               card.dataset.prompt = newPrompt;
             } else {
               alert("再生成エラー: " + JSON.stringify(data));
