@@ -14,6 +14,7 @@
       .row { display:flex; gap:12px; align-items:center; flex-wrap: wrap; margin: 8px 0; }
       label { min-width: 120px; color:#334155; }
       input[type="text"] { width: 320px; padding: 8px 10px; border:1px solid #e2e8f0; border-radius:8px; font:14px system-ui; }
+      select { padding: 8px 10px; border:1px solid #e2e8f0; border-radius:8px; font:14px system-ui; background:#fff; cursor:pointer; }
       textarea { width: 100%; min-height: 140px; padding: 10px; border:1px solid #e2e8f0; border-radius:8px; font:14px system-ui; }
       button { appearance:none; border:0; border-radius:10px; padding:10px 14px; background:#0ea5e9; color:#fff; font-weight:600; cursor:pointer; }
       button:disabled { opacity:.5; cursor: default; }
@@ -52,6 +53,26 @@
 本文の内容に応じて自動で画像を1〜5枚を生成します。</textarea>
 
       <div class="row">
+        <label for="taste">テイスト</label>
+        <select id="taste">
+          <option value="photorealistic">写真画質（デフォルト）</option>
+          <option value="deformed">デフォルメ</option>
+          <option value="handdrawn">手書き風</option>
+          <option value="detailed">精密</option>
+          <option value="pictogram">ピクトグラム</option>
+        </select>
+      </div>
+
+      <div class="row">
+        <label for="aspectRatio">画像サイズ</label>
+        <select id="aspectRatio">
+          <option value="1:1">1:1 スクエア（デフォルト）</option>
+          <option value="9:16">9:16 縦長</option>
+          <option value="16:9">16:9 横長</option>
+        </select>
+      </div>
+
+      <div class="row">
         <button id="btnGenerate">画像生成</button>
         <span class="muted">※ 完了後「再生成」に変わります。</span>
       </div>
@@ -69,6 +90,8 @@
       const $statusToken = document.getElementById("statusToken");
 
       const $article = document.getElementById("article");
+      const $taste = document.getElementById("taste");
+      const $aspectRatio = document.getElementById("aspectRatio");
       const $btnGenerate = document.getElementById("btnGenerate");
       const $statusGen = document.getElementById("statusGen");
       const $gallery = document.getElementById("gallery");
@@ -292,6 +315,41 @@
       ];
 
       // ========================================
+      // テイスト別スタイル指示
+      // ========================================
+      function getTasteStyleInstruction(taste) {
+        const styles = {
+          photorealistic: [
+            "Style: Photorealistic, high-quality photograph",
+            "Quality: Professional photography with natural lighting and depth of field",
+            "Details: Realistic textures, accurate colors, authentic composition"
+          ],
+          deformed: [
+            "Style: Cute deformed illustration with simplified shapes",
+            "Quality: Playful and charming character design",
+            "Details: Exaggerated proportions, rounded features, vibrant colors"
+          ],
+          handdrawn: [
+            "Style: Hand-drawn sketch with pencil or ink texture",
+            "Quality: Artistic hand-crafted feel with visible strokes",
+            "Details: Sketchy lines, organic texture, traditional art medium appearance"
+          ],
+          detailed: [
+            "Style: Highly detailed and intricate illustration",
+            "Quality: Precise, meticulous rendering with fine details",
+            "Details: Complex textures, elaborate patterns, rich visual information"
+          ],
+          pictogram: [
+            "Style: Simple pictogram icon with minimalist design",
+            "Quality: Clean, clear, easily recognizable symbols",
+            "Details: Flat colors, minimal details, strong silhouettes, universal visual language"
+          ]
+        };
+        
+        return styles[taste] || styles.photorealistic;
+      }
+
+      // ========================================
       // 使用済みバリアントの管理
       // ========================================
       let usedVariantIndices = [];
@@ -397,12 +455,17 @@
       // ========================================
       // プロンプト構築：バリアント適用
       // ========================================
-      function buildPromptWithVariant(content, variant) {
+      function buildPromptWithVariant(content, variant, taste) {
+        const tasteInstructions = getTasteStyleInstruction(taste);
+        
         return [
-          "Create a photorealistic image based on the following specifications:",
+          "Create an image based on the following specifications:",
           "",
           "【Subject/Content】",
           content,
+          "",
+          "【Style Instructions】",
+          ...tasteInstructions,
           "",
           "【Visual Specifications】",
           `Camera Angle: ${variant.angle}`,
@@ -412,11 +475,9 @@
           `Environment/Background: ${variant.environment}`,
           "",
           "【Critical Requirements】",
-          "- Photorealistic quality with natural lighting and depth of field",
           "- Japanese people with natural Japanese features (skin tone, facial structure, hair)",
           "- Absolutely NO TEXT, NO LETTERS, NO SIGNS, NO WATERMARKS in the image",
           "- Natural and contextually appropriate background",
-          "- Authentic photographic composition and color grading",
           "",
           "【Anatomical Accuracy - MANDATORY】",
           "- EXACTLY 2 arms per person (left arm and right arm only)",
@@ -437,11 +498,13 @@
       // ========================================
       // カード作成（ダウンロード & 再生成）
       // ========================================
-      function appendImageCard({ src, prompt, index, variantInfo }) {
+      function appendImageCard({ src, prompt, index, variantInfo, taste, aspectRatio }) {
         const card = document.createElement("div");
         card.className = "card";
         card.dataset.prompt = prompt;
         card.dataset.index = String(index);
+        card.dataset.taste = taste;
+        card.dataset.aspectRatio = aspectRatio;
 
         const meta = document.createElement("div");
         meta.className = "meta";
@@ -468,15 +531,21 @@
             re.disabled = true;
             re.textContent = "再生成中…";
             
-            // 再生成時は新しいバリアントを使用
+            // 再生成時は新しいバリアントと現在のテイスト・アスペクト比を使用
             const newVariant = getUniqueVariant();
-            const content = card.dataset.prompt.split("【Subject/Content】")[1].split("【Visual Specifications】")[0].trim();
-            const newPrompt = buildPromptWithVariant(content, newVariant);
+            const content = card.dataset.prompt.split("【Subject/Content】")[1].split("【Style Instructions】")[0].trim();
+            const currentTaste = card.dataset.taste || "photorealistic";
+            const currentAspectRatio = card.dataset.aspectRatio || "1:1";
+            const newPrompt = buildPromptWithVariant(content, newVariant, currentTaste);
             
             const resp = await fetch(`${BACKEND}/api/generate-test-image`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ prompt: newPrompt, provider: "google" })
+              body: JSON.stringify({ 
+                prompt: newPrompt, 
+                provider: "google",
+                aspectRatio: currentAspectRatio
+              })
             });
             const data = await resp.json().catch(() => ({}));
             if (resp.ok && (data.dataUrl || data.url)) {
@@ -512,6 +581,8 @@
       // ========================================
       async function generateAuto() {
         const article = $article.value || "";
+        const taste = $taste.value || "photorealistic";
+        const aspectRatio = $aspectRatio.value || "1:1";
         const chunks = createChunks(article);
 
         $statusGen.classList.remove("ok","error");
@@ -534,14 +605,18 @@
             $statusGen.textContent = `生成中… (${idx + 1}/${chunks.length})`;
 
             const variant = getUniqueVariant();
-            const prompt = buildPromptWithVariant(chunks[idx], variant);
+            const prompt = buildPromptWithVariant(chunks[idx], variant, taste);
             
-            console.log(`[client] Generating #${idx + 1} with variant:`, variant.shot);
+            console.log(`[client] Generating #${idx + 1} with variant:`, variant.shot, `taste: ${taste}, aspectRatio: ${aspectRatio}`);
 
             const resp = await fetch(`${BACKEND}/api/generate-test-image`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ prompt, provider: "google" })
+              body: JSON.stringify({ 
+                prompt, 
+                provider: "google",
+                aspectRatio: aspectRatio
+              })
             });
             const data = await resp.json().catch(() => ({}));
 
@@ -552,7 +627,9 @@
                 src, 
                 prompt, 
                 index: idx,
-                variantInfo: variant
+                variantInfo: variant,
+                taste: taste,
+                aspectRatio: aspectRatio
               });
               console.log(`[client] Generated #${idx + 1} successfully`);
             } else {
