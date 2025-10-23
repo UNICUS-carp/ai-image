@@ -157,11 +157,18 @@ async function generateImage(req, res) {
 
     // 画像データの抽出
     const candidate = data.candidates?.[0];
+    console.log("[gen] Candidate exists:", !!candidate);
+    
     const parts = candidate?.content?.parts;
+    console.log("[gen] Parts count:", parts?.length || 0);
+    
     const imagePart = parts?.find(p => p.inline_data?.mime_type?.startsWith("image/"));
+    console.log("[gen] Image part found:", !!imagePart);
 
     if (!imagePart?.inline_data?.data) {
       console.error("[gen] ERROR: No image data in response");
+      console.error("[gen] candidate:", candidate);
+      console.error("[gen] parts:", parts);
       return res.status(500).json({
         error: "NO_IMAGE_DATA",
         message: "レスポンスに画像データが含まれていません",
@@ -176,11 +183,13 @@ async function generateImage(req, res) {
     console.log(`[gen] - Image generated with aspectRatio: ${aspectRatio}`);
     console.log(`[gen] - MIME type: ${mimeType}`);
     console.log(`[gen] - Image data length: ${imageData.length}`);
+    console.log(`[gen] - Image data preview: ${imageData.substring(0, 100)}...`);
 
     // Base64データURLとして返す
     const dataUrl = `data:${mimeType};base64,${imageData}`;
+    console.log(`[gen] - DataURL preview: ${dataUrl.substring(0, 100)}...`);
 
-    return res.json({
+    const responseBody = {
       dataUrl,
       url: dataUrl,
       provider: "google",
@@ -188,7 +197,10 @@ async function generateImage(req, res) {
       elapsed,
       aspectRatio,
       mimeType
-    });
+    };
+    
+    console.log("[gen] Sending response with keys:", Object.keys(responseBody));
+    return res.json(responseBody);
 
   } catch (err) {
     console.error("[gen] ERROR: Unexpected error");
