@@ -76,7 +76,253 @@
 
       let lastClientToken = null;
 
-      // --- clientToken 取得（OpenAI ChatKit の疎通確認用）
+      // ========================================
+      // バリアント定義（30種類の構図パターン）
+      // ========================================
+      const VISUAL_VARIANTS = [
+        {
+          angle: "正面から見上げるローアングル",
+          shot: "全身を捉えた広角ショット",
+          lighting: "逆光でシルエットを強調",
+          mood: "力強さと決意を感じる雰囲気",
+          environment: "都市の高層ビル群を背景に"
+        },
+        {
+          angle: "斜め45度の視点",
+          shot: "バストアップで表情に焦点",
+          lighting: "柔らかい自然光が顔に当たる",
+          mood: "穏やかで親しみやすい表情",
+          environment: "明るいカフェの窓際"
+        },
+        {
+          angle: "背後から見下ろす俯瞰",
+          shot: "広角で周囲の状況を含む",
+          lighting: "夕暮れのオレンジ色の光",
+          mood: "孤独と静けさ",
+          environment: "人気のない公園のベンチ"
+        },
+        {
+          angle: "真横からのプロファイル",
+          shot: "上半身のミディアムショット",
+          lighting: "側面からのスポットライト",
+          mood: "考え込む真剣な表情",
+          environment: "薄暗い室内、窓から光が差し込む"
+        },
+        {
+          angle: "斜め下から見上げる",
+          shot: "膝上までのミディアムロング",
+          lighting: "明るい日差しが全体を照らす",
+          mood: "希望に満ちた前向きな雰囲気",
+          environment: "青空の広がる屋外"
+        },
+        {
+          angle: "真上からの俯瞰ショット",
+          shot: "作業している手元に焦点",
+          lighting: "均一な白色照明",
+          mood: "集中している様子",
+          environment: "整理された机の上"
+        },
+        {
+          angle: "目線の高さで正面",
+          shot: "顔のクローズアップ",
+          lighting: "柔らかいリムライト",
+          mood: "感情が表情に現れている",
+          environment: "ぼかした背景"
+        },
+        {
+          angle: "斜め上から見下ろす",
+          shot: "全身を含む引きのショット",
+          lighting: "曇り空の拡散光",
+          mood: "疲労感や重圧を感じる",
+          environment: "雨の日の街角"
+        },
+        {
+          angle: "横から捉えたウォーキングショット",
+          shot: "腰から上のミディアムショット",
+          lighting: "店の灯りが顔を照らす",
+          mood: "活気と動きのある雰囲気",
+          environment: "夜の繁華街"
+        },
+        {
+          angle: "やや下から見上げる",
+          shot: "膝下までのロングショット",
+          lighting: "朝の清々しい光",
+          mood: "新しい一日の始まりを感じる",
+          environment: "朝日が差し込む駅のホーム"
+        },
+        {
+          angle: "背中越しのオーバーショルダー",
+          shot: "見ている対象物に焦点",
+          lighting: "画面の光が顔を照らす",
+          mood: "集中して画面を見つめる",
+          environment: "オフィスのデスク"
+        },
+        {
+          angle: "斜め横から接近した視点",
+          shot: "顔と手元が見えるショット",
+          lighting: "温かみのある間接照明",
+          mood: "リラックスした穏やかな時間",
+          environment: "自宅のリビング"
+        },
+        {
+          angle: "ローアングルで足元から",
+          shot: "全身を下から捉える",
+          lighting: "強い影を作る直射日光",
+          mood: "威厳や存在感を強調",
+          environment: "階段や坂道"
+        },
+        {
+          angle: "正面やや上から",
+          shot: "胸から上のクローズアップ",
+          lighting: "柔らかいディフューズ光",
+          mood: "優しさや温もりを感じる",
+          environment: "家庭的な室内"
+        },
+        {
+          angle: "遠くから望遠で捉える",
+          shot: "周囲の環境を含む超ロング",
+          lighting: "自然な屋外の光",
+          mood: "広大さや開放感",
+          environment: "山や海などの自然の中"
+        },
+        {
+          angle: "真正面のシンメトリー構図",
+          shot: "上半身のポートレート",
+          lighting: "均等な両側からの光",
+          mood: "安定感とバランス",
+          environment: "シンプルな背景"
+        },
+        {
+          angle: "斜め下からの動的なアングル",
+          shot: "動きを捉えたアクションショット",
+          lighting: "逆光で輪郭を強調",
+          mood: "エネルギッシュで躍動感",
+          environment: "スポーツ施設や運動場"
+        },
+        {
+          angle: "横から見た歩行シーン",
+          shot: "腰から上を追従するパン",
+          lighting: "街灯が断続的に照らす",
+          mood: "日常の一コマ",
+          environment: "夜の住宅街"
+        },
+        {
+          angle: "やや俯瞰で斜めから",
+          shot: "机や作業台を含むショット",
+          lighting: "タスクライトのスポット",
+          mood: "作業に没頭している様子",
+          environment: "工房やアトリエ"
+        },
+        {
+          angle: "目線より少し上から",
+          shot: "座っている姿を捉える",
+          lighting: "窓からの自然光",
+          mood: "思索に耽る静かな時間",
+          environment: "図書館や書斎"
+        },
+        {
+          angle: "真横からのフラットな視点",
+          shot: "立ち姿の全身",
+          lighting: "均一なスタジオ照明",
+          mood: "ニュートラルで客観的",
+          environment: "白い背景のスタジオ"
+        },
+        {
+          angle: "斜め上から見下ろす視点",
+          shot: "複数人を含む群衆ショット",
+          lighting: "イベント照明の明るい光",
+          mood: "賑やかで活気に満ちた",
+          environment: "お祭りやイベント会場"
+        },
+        {
+          angle: "低い位置からのアップ",
+          shot: "顔だけの超クローズアップ",
+          lighting: "強いコントラストの照明",
+          mood: "緊張感や緊迫した雰囲気",
+          environment: "暗い部屋"
+        },
+        {
+          angle: "やや斜めの自然な視点",
+          shot: "日常的な動作を捉える",
+          lighting: "午後の柔らかい光",
+          mood: "何気ない日常の幸せ",
+          environment: "公園や街中"
+        },
+        {
+          angle: "背後から肩越しに",
+          shot: "見ている風景を共有する構図",
+          lighting: "景色からの反射光",
+          mood: "憧れや期待感",
+          environment: "展望台や窓際"
+        },
+        {
+          angle: "真下から見上げる極端なローアングル",
+          shot: "全身と空を含む",
+          lighting: "直射日光の強い光",
+          mood: "圧倒的な存在感",
+          environment: "開けた屋外"
+        },
+        {
+          angle: "斜め下からの親密な距離",
+          shot: "顔と手元が見える近接ショット",
+          lighting: "キャンドルや暖炉の温かい光",
+          mood: "親密で個人的な雰囲気",
+          environment: "落ち着いた室内"
+        },
+        {
+          angle: "正面から少し左寄りの視点",
+          shot: "上半身のビジネスショット",
+          lighting: "明るく清潔感のある照明",
+          mood: "プロフェッショナルで信頼感",
+          environment: "オフィスや会議室"
+        },
+        {
+          angle: "高い位置からの完全俯瞰",
+          shot: "空間全体を捉える",
+          lighting: "天井照明の均一な光",
+          mood: "客観的で全体を俯瞰する",
+          environment: "会議室やホール"
+        },
+        {
+          angle: "斜め後ろから追いかける視点",
+          shot: "背中と進む先を含む",
+          lighting: "前方からの光",
+          mood: "前進や旅立ちの予感",
+          environment: "道路やトンネル"
+        }
+      ];
+
+      // ========================================
+      // 使用済みバリアントの管理
+      // ========================================
+      let usedVariantIndices = [];
+
+      function resetUsedVariants() {
+        usedVariantIndices = [];
+      }
+
+      function getUniqueVariant() {
+        if (usedVariantIndices.length >= VISUAL_VARIANTS.length) {
+          // 全て使い切ったらリセット
+          resetUsedVariants();
+        }
+        
+        // 未使用のインデックスから選ぶ
+        const availableIndices = [];
+        for (let i = 0; i < VISUAL_VARIANTS.length; i++) {
+          if (!usedVariantIndices.includes(i)) {
+            availableIndices.push(i);
+          }
+        }
+        
+        const randomIndex = availableIndices[Math.floor(Math.random() * availableIndices.length)];
+        usedVariantIndices.push(randomIndex);
+        return VISUAL_VARIANTS[randomIndex];
+      }
+
+      // ========================================
+      // clientToken 取得（OpenAI ChatKit の疎通確認用）
+      // ========================================
       async function getToken() {
         $btnToken.disabled = true;
         $statusToken.classList.remove("ok","error");
@@ -107,54 +353,78 @@
         }
       }
 
-      // --- 暫定分割：200文字ごと最大5
-      function splitIntoChunksAuto(text) {
-        const maxImages = 5;
-        const unit = 200;
-        const clean = (text || "").trim();
-        if (!clean) return [];
-        const chunks = [];
-        let i = 0;
-        while (i < clean.length && chunks.length < maxImages) {
-          const end = Math.min(i + unit, clean.length);
-          chunks.push(clean.slice(i, end));
-          i = end;
+      // ========================================
+      // 文章分析：意味のある文章を抽出
+      // ========================================
+      function extractMeaningfulSentences(text) {
+        const sentences = (text || "")
+          .split(/(?<=[。！？\?\!])|\n+/g)
+          .map(s => s.trim())
+          .filter(s => s.length >= 15); // 短すぎる文は除外
+        
+        return sentences;
+      }
+
+      // ========================================
+      // チャンク作成：長さに応じて1〜5枚
+      // ========================================
+      function createChunks(text) {
+        const sentences = extractMeaningfulSentences(text);
+        
+        if (sentences.length === 0) {
+          return [(text || "").slice(0, 200)];
         }
-        if (chunks.length === 0 && clean) chunks.push(clean);
+
+        // 文章の長さに応じて枚数を決定
+        const totalLength = text.length;
+        let numImages = 1;
+        if (totalLength > 1500) numImages = 5;
+        else if (totalLength > 1000) numImages = 4;
+        else if (totalLength > 600) numImages = 3;
+        else if (totalLength > 300) numImages = 2;
+
+        // 文章を均等に分散させる
+        const chunks = [];
+        const step = Math.max(1, Math.floor(sentences.length / numImages));
+        
+        for (let i = 0; i < numImages && i * step < sentences.length; i++) {
+          const sentenceIndex = i * step;
+          chunks.push(sentences[sentenceIndex]);
+        }
+
         return chunks;
       }
 
-      // --- 具体要素抽出（簡易）：文単位に分割し、チャンク番号に応じて異なる文を採用
-      function pickSpecificSlice(text, idx) {
-        const sentences = (text || "")
-          .split(/(?<=[。！？\?\!])|\n+/g) // 句点・改行で分割
-          .map(s => s.trim())
-          .filter(s => s.length >= 8);
-        if (sentences.length === 0) return (text || "").slice(0, 150);
-        // 同じような画像ばかりにならないよう、idxでずらす
-        const s = sentences[idx % sentences.length];
-        return s.length > 240 ? s.slice(0, 240) + "…" : s;
-      }
-
-      // --- プロンプト構築：写真画質・ノーテキスト・日本人固定・具体要素主題化
-      function buildPromptFromChunk(chunkText, idx) {
-        const specific = pickSpecificSlice(chunkText, idx);
+      // ========================================
+      // プロンプト構築：バリアント適用
+      // ========================================
+      function buildPromptWithVariant(content, variant) {
         return [
-          "【要件】以下の具体的な内容に対応した、写真画質のリアルなイメージを1枚生成してください。",
-          "・画像内に文字/記号/看板の文字/透かしは一切入れない（NO TEXT, NO LETTERS, NO WATERMARKS）。",
-          "・人物が登場する場合は、日本人として自然な容姿で描写する（肌色・顔立ち・髪質など）。",
-          "・各画像は似通わないよう、本文の中の異なる具体要素を主題にする（この画像では下記の具体要素を主題に）。",
-          "・背景は本文の文脈に沿って自然に。過度に装飾的にしない。",
+          "Create a photorealistic image based on the following specifications:",
           "",
-          "【この画像の主題（本文の具体要素）】",
-          specific,
+          "【Subject/Content】",
+          content,
           "",
-          "【補足】光や質感は写実的。被写界深度や陰影は自然。ロゴ・テキスト要素は禁止。"
+          "【Visual Specifications】",
+          `Camera Angle: ${variant.angle}`,
+          `Shot Type: ${variant.shot}`,
+          `Lighting: ${variant.lighting}`,
+          `Mood/Atmosphere: ${variant.mood}`,
+          `Environment/Background: ${variant.environment}`,
+          "",
+          "【Critical Requirements】",
+          "- Photorealistic quality with natural lighting and depth of field",
+          "- Japanese people with natural Japanese features (skin tone, facial structure, hair)",
+          "- Absolutely NO TEXT, NO LETTERS, NO SIGNS, NO WATERMARKS in the image",
+          "- Natural and contextually appropriate background",
+          "- Authentic photographic composition and color grading"
         ].join("\n");
       }
 
-      // --- カード（ダウンロード & 再生成）
-      function appendImageCard({ src, prompt, index }) {
+      // ========================================
+      // カード作成（ダウンロード & 再生成）
+      // ========================================
+      function appendImageCard({ src, prompt, index, variantInfo }) {
         const card = document.createElement("div");
         card.className = "card";
         card.dataset.prompt = prompt;
@@ -162,7 +432,7 @@
 
         const meta = document.createElement("div");
         meta.className = "meta";
-        meta.textContent = `#${index + 1} / プロンプト（内部保持・非表示UI）`;
+        meta.textContent = `#${index + 1} | ${variantInfo.shot} | ${variantInfo.lighting}`;
 
         const img = new Image();
         img.className = "preview";
@@ -184,10 +454,16 @@
           try {
             re.disabled = true;
             re.textContent = "再生成中…";
+            
+            // 再生成時は新しいバリアントを使用
+            const newVariant = getUniqueVariant();
+            const content = card.dataset.prompt.split("【Subject/Content】")[1].split("【Visual Specifications】")[0].trim();
+            const newPrompt = buildPromptWithVariant(content, newVariant);
+            
             const resp = await fetch(`${BACKEND}/api/generate-test-image`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ prompt: card.dataset.prompt, provider: "google" }) // 写真画質等はプロンプトに含め済み
+              body: JSON.stringify({ prompt: newPrompt, provider: "google" })
             });
             const data = await resp.json().catch(() => ({}));
             if (resp.ok && (data.dataUrl || data.url)) {
@@ -195,6 +471,8 @@
               img.src = newSrc;
               a.href = newSrc;
               a.download = `illustauto_${Date.now()}_${index + 1}.png`;
+              meta.textContent = `#${index + 1} | ${newVariant.shot} | ${newVariant.lighting}`;
+              card.dataset.prompt = newPrompt;
             } else {
               alert("再生成エラー: " + JSON.stringify(data));
               console.error("[client] regenerate error:", data);
@@ -216,10 +494,12 @@
         $gallery.appendChild(card);
       }
 
-      // --- 本文 → 自動枚数で順次生成（Google固定）
+      // ========================================
+      // 画像生成メイン処理
+      // ========================================
       async function generateAuto() {
         const article = $article.value || "";
-        const chunks = splitIntoChunksAuto(article);
+        const chunks = createChunks(article);
 
         $statusGen.classList.remove("ok","error");
         if (chunks.length === 0) {
@@ -231,27 +511,39 @@
         const origLabel = $btnGenerate.textContent;
         $btnGenerate.disabled = true;
         $btnGenerate.textContent = "生成中…";
+        
+        // バリアント使用履歴をリセット
+        resetUsedVariants();
 
         let success = 0;
         try {
           for (let idx = 0; idx < chunks.length; idx++) {
             $statusGen.textContent = `生成中… (${idx + 1}/${chunks.length})`;
 
-            const prompt = buildPromptFromChunk(chunks[idx], idx);
+            const variant = getUniqueVariant();
+            const prompt = buildPromptWithVariant(chunks[idx], variant);
+            
+            console.log(`[client] Generating #${idx + 1} with variant:`, variant.shot);
+
             const resp = await fetch(`${BACKEND}/api/generate-test-image`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ prompt, provider: "google" }) // Google（写真画質指示はプロンプト側で指定）
+              body: JSON.stringify({ prompt, provider: "google" })
             });
             const data = await resp.json().catch(() => ({}));
 
             if (resp.ok && (data.dataUrl || data.url)) {
               success++;
               const src = data.dataUrl || data.url;
-              appendImageCard({ src, prompt, index: idx });
-              console.log(`[client] generated #${idx + 1}`);
+              appendImageCard({ 
+                src, 
+                prompt, 
+                index: idx,
+                variantInfo: variant
+              });
+              console.log(`[client] Generated #${idx + 1} successfully`);
             } else {
-              console.error(`[client] error on #${idx + 1}:`, data);
+              console.error(`[client] Error on #${idx + 1}:`, data);
             }
           }
 
@@ -268,10 +560,13 @@
           console.error("[client] generateAuto error:", e);
         } finally {
           $btnGenerate.disabled = false;
-          $btnGenerate.textContent = (success > 0) ? "再生成" : origLabel;
+          $btnGenerate.textContent = (success > 0) ? "全てを再生成" : origLabel;
         }
       }
 
+      // ========================================
+      // 初期化
+      // ========================================
       document.addEventListener("DOMContentLoaded", () => {
         document.getElementById("btnToken").addEventListener("click", getToken);
         document.getElementById("btnGenerate").addEventListener("click", generateAuto);
