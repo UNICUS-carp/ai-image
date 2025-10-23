@@ -33,9 +33,9 @@ app.post("/api/passkey-token", (req, res) => {
 });
 
 // ========================================
-// 画像生成（Gemini 2.5 Flash Image）
+// 画像生成の共通処理
 // ========================================
-app.post("/api/generate-test-image", async (req, res) => {
+async function generateImage(req, res) {
   const { prompt, provider = "google", aspectRatio = "1:1" } = req.body;
   
   console.log("[gen] ===========================================");
@@ -207,7 +207,22 @@ app.post("/api/generate-test-image", async (req, res) => {
       details: err.message
     });
   }
-});
+}
+
+// ========================================
+// 画像生成エンドポイント
+// ========================================
+app.post("/api/generate", generateImage);
+
+// ========================================
+// 再生成エンドポイント（画像生成と同じ処理）
+// ========================================
+app.post("/api/regenerate", generateImage);
+
+// ========================================
+// 後方互換性のため、古いエンドポイントも残す
+// ========================================
+app.post("/api/generate-test-image", generateImage);
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
