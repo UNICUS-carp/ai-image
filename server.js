@@ -121,7 +121,7 @@ async function splitContentWithRetry(content, hasHeadings, headings, apiKey) {
 // Gemini APIで本文分割（本体）
 // ========================================
 async function splitContentWithGemini(content, hasHeadings, headings, apiKey) {
-  const modelName = "gemini-2.0-flash-exp";
+  const modelName = "gemini-1.5-flash";
   const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent`;
 
   let prompt;
@@ -131,16 +131,23 @@ async function splitContentWithGemini(content, hasHeadings, headings, apiKey) {
     prompt = `あなたは日本語の文章を分析し、構造化するエキスパートです。
 
 【タスク】
-以下の小見出しを分析し、類似・重複を統合して最大5つに絞ってください。
+以下の小見出しを分析してください。
 
 【小見出し一覧】
 ${headings.map((h, i) => `${i + 1}. ${h}`).join('\n')}
 
 【要件】
-1. 意味が類似・重複している小見出しを統合
-2. 最終的に最大5つの小見出しに絞る
-3. 各小見出しは明確で重複がないこと
-4. 統合する際は、より包括的で分かりやすい表現にする
+1. 小見出しを統合せず、すべてそのまま使用する
+2. 各小見出しに対応する本文を抽出
+3. 小見出しの順序を保持
+4. 小見出しが6つ以上ある場合のみ、最も重要な5つを選択してください
+
+【重要度評価基準（6つ以上の場合）】
+- 主要テーマとの関連性
+- 読者にとっての実用性・役立ち度  
+- 情報の具体性
+- 日本語の文章構造（結論が最後に来ることへの配慮）
+- 全体的なバランス
 
 【出力形式】
 必ずJSON形式で出力してください：
