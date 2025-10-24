@@ -1,9 +1,146 @@
 import express from "express";
 import cors from "cors";
+import rateLimit from "express-rate-limit";
+import Database from "./database.js";
+import PasskeyAuthenticator from "./auth.js";
 
 const app = express();
-app.use(cors());
+
+// CORS設定（本番環境では制限）
+const corsOptions = {
+  origin: process.env.NODE_ENV === 'production' 
+    ? process.env.ALLOWED_ORIGINS?.split(',') || ['https://unicus.top']
+    : true, // 開発環境では全許可
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Session-Id', 'X-Dev-Token']
+};
+
+app.use(cors(corsOptions));
 app.use(express.json({ limit: "10mb" }));
+
+// 悪意のあるボット・攻撃者対策
+app.use('/api/', (req, res, next) => {
+  const userAgent = req.headers['user-agent'] || '';
+  const suspicious = [
+    'bot', 'crawler', 'spider', 'scan', 'test', 'python', 'curl', 'wget',
+    'automated', 'scraper', 'hack', 'exploit', 'injection', 'attack'
+  ];
+  
+  if (suspicious.some(pattern => userAgent.toLowerCase().includes(pattern))) {
+    console.log(`[security] Suspicious user-agent blocked: ${userAgent}`);
+    return res.status(403).json({
+      error: "BLOCKED",
+      message: "不正なアクセスが検出されました"
+    });
+  }
+  next();
+});
+
+// グローバルレート制限（一般的なAPIアクセス）
+const globalRateLimit = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15分
+  max: 100, // 15分間に100リクエスト
+  message: {
+    error: "RATE_LIMIT_EXCEEDED",
+    message: "アクセス頻度が高すぎます。しばらく待ってから再試行してください"
+  },
+  standardHeaders: true,
+  legacyHeaders: false
+});
+
+// 認証関連のレート制限（より厳しく）
+const authRateLimit = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15分
+  max: 10, // 15分間に10回
+  message: {
+    error: "AUTH_RATE_LIMIT_EXCEEDED",
+    message: "認証試行回数が多すぎます。しばらく待ってから再試行してください"
+  }
+});
+
+// APIエンドポイントにレート制限を適用
+app.use('/api/auth/', authRateLimit);
+app.use('/api/', globalRateLimit);
+
+// セキュリティヘッダー設定（強化版）
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('X-XSS-Protection', '1; mode=block');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('X-DNS-Prefetch-Control', 'off');
+  res.setHeader('X-Download-Options', 'noopen');
+  res.setHeader('X-Permitted-Cross-Domain-Policies', 'none');
+  
+  if (process.env.NODE_ENV === 'production') {
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains; preload');
+    res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' https://generativelanguage.googleapis.com https://api.openai.com;");
+  }
+  next();
+});
+
+// 不正なリクエストペイロード検証
+app.use((req, res, next) => {
+  const suspiciousPatterns = [
+    /<script[^>]*>.*?<\/script>/gi,
+    /javascript:/gi,
+    /vbscript:/gi,
+    /onload\s*=/gi,
+    /onerror\s*=/gi,
+    /eval\s*\(/gi,
+    /document\.cookie/gi,
+    /document\.write/gi,
+    /window\.location/gi,
+    /'\s*(union|select|insert|update|delete|drop|create|alter)\s+/gi,
+    /\b(union|select|insert|update|delete|drop|create|alter)\b.*\b(from|into|set|table|database)\b/gi
+  ];
+  
+  const checkPayload = (obj) => {
+    if (typeof obj === 'string') {
+      return suspiciousPatterns.some(pattern => pattern.test(obj));
+    }
+    if (typeof obj === 'object' && obj !== null) {
+      return Object.values(obj).some(value => checkPayload(value));
+    }
+    return false;
+  };
+  
+  if (req.body && checkPayload(req.body)) {
+    console.log(`[security] Malicious payload detected from IP: ${req.ip}`);
+    return res.status(400).json({
+      error: "INVALID_REQUEST",
+      message: "リクエストに不正な内容が含まれています"
+    });
+  }
+  
+  next();
+});
+
+// データベースと認証システムの初期化
+const db = new Database();
+const auth = new PasskeyAuthenticator(db);
+
+// アプリケーション初期化
+async function initializeApp() {
+  try {
+    await db.initialize();
+    console.log('[app] Database initialized successfully');
+    
+    // 定期クリーンアップの設定（1時間ごと）
+    setInterval(() => {
+      auth.cleanup();
+    }, 60 * 60 * 1000);
+    
+    console.log('[app] Authentication system initialized');
+  } catch (error) {
+    console.error('[app] Failed to initialize application:', error);
+    process.exit(1);
+  }
+}
+
+// アプリケーションを初期化
+await initializeApp();
 
 const MAX_CONTENT_LENGTH = 5000;
 
@@ -11,19 +148,356 @@ const MAX_CONTENT_LENGTH = 5000;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
 // ========================================
-// デバッグ用：設定確認
+// デバッグ用：設定確認（開発環境のみ）
 // ========================================
-app.get("/debug/config", (req, res) => {
-  res.json({
-    NODE_ENV: process.env.NODE_ENV || "development",
-    hasGeminiApiKey: !!(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY),
-    model: "gemini-2.5-flash-image",
-    maxContentLength: MAX_CONTENT_LENGTH
+if (process.env.NODE_ENV !== 'production') {
+  app.get("/debug/config", (req, res) => {
+    res.json({
+      NODE_ENV: process.env.NODE_ENV || "development",
+      hasGeminiApiKey: !!(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY),
+      model: "gemini-2.5-flash-image",
+      maxContentLength: MAX_CONTENT_LENGTH
+    });
   });
+}
+
+// ========================================
+// 認証ミドルウェア
+// ========================================
+async function requireAuth(req, res, next) {
+  try {
+    const sessionId = req.headers.authorization?.replace('Bearer ', '') || 
+                     req.headers['x-session-id'];
+    
+    if (!sessionId) {
+      return res.status(401).json({ 
+        error: "AUTHENTICATION_REQUIRED",
+        message: "認証が必要です" 
+      });
+    }
+
+    const validation = await auth.validateSession(sessionId);
+    if (!validation.valid) {
+      return res.status(401).json({ 
+        error: "INVALID_SESSION",
+        message: validation.message 
+      });
+    }
+
+    req.user = validation.user;
+    req.sessionData = validation.sessionData;
+    
+    // ユーザーのロールを取得
+    const userRole = await db.getUserRole(req.user.id);
+    req.user.role = userRole;
+    req.sessionData.role = userRole;
+    
+    // 開発者以外は支払い状況をチェック
+    if (userRole !== 'developer') {
+      const paymentStatus = await db.checkPaymentStatus(req.user.email);
+      if (paymentStatus !== 'paid') {
+        return res.status(403).json({
+          error: "PAYMENT_REQUIRED",
+          message: "サービスの利用には有効な決済が必要です",
+          paymentStatus: paymentStatus || 'pending',
+          instruction: "管理者による決済確認が完了していません"
+        });
+      }
+    }
+    
+    next();
+  } catch (error) {
+    console.error('[auth] Authentication middleware error:', error);
+    return res.status(500).json({ 
+      error: "AUTHENTICATION_ERROR",
+      message: "認証エラーが発生しました" 
+    });
+  }
+}
+
+// ========================================
+// 使用量制限ミドルウェア
+// ========================================
+async function checkUsageLimits(req, res, next) {
+  try {
+    // 開発者は制限なし
+    if (req.user?.role === 'developer') {
+      console.log('[usage] Developer role - skipping usage limits');
+      return next();
+    }
+
+    const userId = req.user.id;
+    const isRegeneration = req.path.includes('regenerate');
+    
+    // 今日の使用量を取得
+    const todayUsage = await db.getTodayUsage(userId);
+    const currentArticleCount = todayUsage?.article_count || 0;
+    const currentRegenerationCount = todayUsage?.regeneration_count || 0;
+    
+    // 制限値
+    const DAILY_ARTICLE_LIMIT = 5;
+    const DAILY_REGENERATION_LIMIT = 50;
+    
+    if (isRegeneration) {
+      if (currentRegenerationCount >= DAILY_REGENERATION_LIMIT) {
+        return res.status(429).json({
+          error: "REGENERATION_LIMIT_EXCEEDED",
+          message: `1日の再生成制限（${DAILY_REGENERATION_LIMIT}回）に達しました`,
+          limits: {
+            dailyRegenerationLimit: DAILY_REGENERATION_LIMIT,
+            currentRegenerationCount,
+            remainingRegenerations: 0
+          }
+        });
+      }
+    } else {
+      if (currentArticleCount >= DAILY_ARTICLE_LIMIT) {
+        return res.status(429).json({
+          error: "ARTICLE_LIMIT_EXCEEDED", 
+          message: `1日の記事生成制限（${DAILY_ARTICLE_LIMIT}記事）に達しました`,
+          limits: {
+            dailyArticleLimit: DAILY_ARTICLE_LIMIT,
+            currentArticleCount,
+            remainingArticles: 0
+          }
+        });
+      }
+    }
+    
+    // 制限内の場合は次へ
+    req.usageInfo = {
+      userId,
+      isRegeneration,
+      currentArticleCount,
+      currentRegenerationCount,
+      remainingArticles: DAILY_ARTICLE_LIMIT - currentArticleCount,
+      remainingRegenerations: DAILY_REGENERATION_LIMIT - currentRegenerationCount
+    };
+    
+    console.log(`[usage] User ${userId}: ${currentArticleCount}/${DAILY_ARTICLE_LIMIT} articles, ${currentRegenerationCount}/${DAILY_REGENERATION_LIMIT} regenerations`);
+    next();
+  } catch (error) {
+    console.error('[usage] Usage limit check error:', error);
+    return res.status(500).json({
+      error: "USAGE_CHECK_ERROR",
+      message: "使用量確認エラーが発生しました"
+    });
+  }
+}
+
+// 使用量更新ミドルウェア（成功時に実行）
+async function incrementUsage(req, res, next) {
+  try {
+    if (req.user?.role === 'developer') {
+      return next();
+    }
+
+    const { userId, isRegeneration } = req.usageInfo;
+    const type = isRegeneration ? 'regeneration' : 'article';
+    
+    await db.incrementUsage(userId, type);
+    console.log(`[usage] Incremented ${type} usage for user ${userId}`);
+    
+    next();
+  } catch (error) {
+    console.error('[usage] Usage increment error:', error);
+    // エラーでもレスポンスは続行（使用量更新の失敗で処理を止めない）
+    next();
+  }
+}
+
+// ========================================
+// Passkey認証エンドポイント
+// ========================================
+
+// 登録開始
+app.post("/api/auth/register/begin", async (req, res) => {
+  try {
+    const { email, displayName } = req.body;
+    
+    if (!email) {
+      return res.status(400).json({
+        error: "EMAIL_REQUIRED",
+        message: "メールアドレスが必要です"
+      });
+    }
+
+    // 支払い状態をチェック
+    const paymentStatus = await db.checkPaymentStatus(email);
+    if (paymentStatus !== 'paid') {
+      return res.status(403).json({
+        error: "PAYMENT_REQUIRED",
+        message: "サービスのご利用には決済が必要です",
+        paymentStatus: paymentStatus || 'pending',
+        instruction: "決済完了後、Passkey登録が可能になります"
+      });
+    }
+
+    const result = await auth.generateRegistrationOptions(email, displayName);
+    
+    if (result.success) {
+      res.json({
+        success: true,
+        options: result.options,
+        userId: result.userId
+      });
+    } else {
+      res.status(500).json({
+        error: "REGISTRATION_FAILED",
+        message: "登録の準備に失敗しました"
+      });
+    }
+  } catch (error) {
+    console.error('[auth] Registration begin error:', error);
+    res.status(500).json({
+      error: "SERVER_ERROR",
+      message: "サーバーエラーが発生しました"
+    });
+  }
+});
+
+// 登録完了
+app.post("/api/auth/register/complete", async (req, res) => {
+  try {
+    const { userId, registrationResponse } = req.body;
+    
+    if (!userId || !registrationResponse) {
+      return res.status(400).json({
+        error: "INVALID_REQUEST",
+        message: "必要なパラメータが不足しています"
+      });
+    }
+
+    const result = await auth.verifyRegistration(userId, registrationResponse);
+    
+    if (result.success) {
+      res.json({
+        success: true,
+        verified: result.verified,
+        message: result.message
+      });
+    } else {
+      res.status(400).json({
+        error: "REGISTRATION_VERIFICATION_FAILED",
+        message: result.message
+      });
+    }
+  } catch (error) {
+    console.error('[auth] Registration complete error:', error);
+    res.status(500).json({
+      error: "SERVER_ERROR",
+      message: "サーバーエラーが発生しました"
+    });
+  }
+});
+
+// 認証開始
+app.post("/api/auth/authenticate/begin", async (req, res) => {
+  try {
+    const { email } = req.body;
+    
+    const result = await auth.generateAuthenticationOptions(email);
+    
+    if (result.success) {
+      res.json({
+        success: true,
+        options: result.options
+      });
+    } else {
+      res.status(500).json({
+        error: "AUTHENTICATION_FAILED",
+        message: "認証の準備に失敗しました"
+      });
+    }
+  } catch (error) {
+    console.error('[auth] Authentication begin error:', error);
+    res.status(500).json({
+      error: "SERVER_ERROR",
+      message: "サーバーエラーが発生しました"
+    });
+  }
+});
+
+// 認証完了
+app.post("/api/auth/authenticate/complete", async (req, res) => {
+  try {
+    const { authenticationResponse } = req.body;
+    
+    if (!authenticationResponse) {
+      return res.status(400).json({
+        error: "INVALID_REQUEST",
+        message: "認証レスポンスが必要です"
+      });
+    }
+
+    const result = await auth.verifyAuthentication(authenticationResponse);
+    
+    if (result.success) {
+      res.json({
+        success: true,
+        verified: result.verified,
+        user: result.user,
+        sessionId: result.sessionId,
+        message: result.message
+      });
+    } else {
+      res.status(400).json({
+        error: "AUTHENTICATION_VERIFICATION_FAILED",
+        message: result.message
+      });
+    }
+  } catch (error) {
+    console.error('[auth] Authentication complete error:', error);
+    res.status(500).json({
+      error: "SERVER_ERROR",
+      message: "サーバーエラーが発生しました"
+    });
+  }
+});
+
+// ログアウト
+app.post("/api/auth/logout", async (req, res) => {
+  try {
+    const sessionId = req.headers.authorization?.replace('Bearer ', '') || 
+                     req.headers['x-session-id'];
+    
+    const result = await auth.logout(sessionId);
+    res.json(result);
+  } catch (error) {
+    console.error('[auth] Logout error:', error);
+    res.status(500).json({
+      error: "SERVER_ERROR",
+      message: "ログアウトに失敗しました"
+    });
+  }
+});
+
+// セッション確認
+app.get("/api/auth/session", async (req, res) => {
+  try {
+    const sessionId = req.headers.authorization?.replace('Bearer ', '') || 
+                     req.headers['x-session-id'];
+    
+    if (!sessionId) {
+      return res.status(401).json({ 
+        valid: false, 
+        message: "セッションIDが提供されていません" 
+      });
+    }
+
+    const validation = await auth.validateSession(sessionId);
+    res.json(validation);
+  } catch (error) {
+    console.error('[auth] Session check error:', error);
+    res.status(500).json({
+      valid: false,
+      message: "セッション確認エラー"
+    });
+  }
 });
 
 // ========================================
-// Passkey トークン発行（ステージング用）
+// Passkey トークン発行（後方互換性のため保持）
 // ========================================
 app.post("/api/passkey-token", (req, res) => {
   const { userId } = req.body;
@@ -38,7 +512,7 @@ app.post("/api/passkey-token", (req, res) => {
 // ========================================
 // 本文分割（Gemini APIで意味の切れ目判定）
 // ========================================
-app.post("/api/split-content", async (req, res) => {
+app.post("/api/split-content", requireAuth, async (req, res) => {
   const { content, hasHeadings = false, headings = [] } = req.body;
   
   console.log("[split] ===========================================");
@@ -48,7 +522,7 @@ app.post("/api/split-content", async (req, res) => {
   console.log(`[split] - headings count: ${headings.length}`);
   console.log("[split] ===========================================");
 
-  // バリデーション
+  // 強化されたバリデーション
   if (!content || content.trim().length === 0) {
     console.error("[split] ERROR: No content provided");
     return res.status(400).json({
@@ -63,6 +537,62 @@ app.post("/api/split-content", async (req, res) => {
       error: "CONTENT_TOO_LONG",
       message: `本文が長すぎます（${content.length}文字 > ${MAX_CONTENT_LENGTH}文字）`
     });
+  }
+  
+  // 不正な文字・パターンの検出
+  const maliciousPatterns = [
+    /<script[^>]*>/gi,
+    /javascript:/gi,
+    /vbscript:/gi,
+    /on\w+\s*=/gi,
+    /eval\s*\(/gi,
+    /document\./gi,
+    /window\./gi,
+    /\bexec\b/gi,
+    /\bsystem\b/gi,
+    /file:\/\//gi
+  ];
+  
+  if (maliciousPatterns.some(pattern => pattern.test(content))) {
+    console.log(`[security] Malicious content detected in split request from user: ${req.user.email}`);
+    return res.status(400).json({
+      error: "MALICIOUS_CONTENT",
+      message: "不正な内容が検出されました"
+    });
+  }
+  
+  // 見出しの検証
+  if (hasHeadings && headings) {
+    if (!Array.isArray(headings)) {
+      return res.status(400).json({
+        error: "INVALID_HEADINGS_FORMAT",
+        message: "見出しの形式が正しくありません"
+      });
+    }
+    
+    if (headings.length > 20) {
+      return res.status(400).json({
+        error: "TOO_MANY_HEADINGS",
+        message: "見出しが多すぎます（最大20個）"
+      });
+    }
+    
+    for (const heading of headings) {
+      if (typeof heading !== 'string' || heading.length > 200) {
+        return res.status(400).json({
+          error: "INVALID_HEADING",
+          message: "見出しの形式または長さが正しくありません"
+        });
+      }
+      
+      if (maliciousPatterns.some(pattern => pattern.test(heading))) {
+        console.log(`[security] Malicious heading detected: ${heading}`);
+        return res.status(400).json({
+          error: "MALICIOUS_HEADING",
+          message: "不正な見出しが検出されました"
+        });
+      }
+    }
   }
 
   const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || "";
@@ -866,19 +1396,494 @@ async function generateImage(req, res) {
 }
 
 // ========================================
-// 画像生成エンドポイント
+// デモ使用エンドポイント（無料試用・強化版）
 // ========================================
-app.post("/api/generate", generateImage);
+
+// 悪意のあるアクセスパターン検出
+const suspiciousIPs = new Map();
+const blockedIPs = new Set();
+
+function detectMaliciousActivity(req, res, next) {
+  const clientIp = req.headers['x-forwarded-for']?.split(',')[0] || 
+                  req.headers['x-real-ip'] || 
+                  req.connection.remoteAddress;
+  
+  // IPブロックリストチェック
+  if (blockedIPs.has(clientIp)) {
+    console.log(`[security] Blocked IP attempted access: ${clientIp}`);
+    return res.status(403).json({
+      error: "BLOCKED",
+      message: "このIPアドレスからのアクセスは制限されています"
+    });
+  }
+  
+  const now = Date.now();
+  const windowMs = 60 * 1000; // 1分
+  
+  if (!suspiciousIPs.has(clientIp)) {
+    suspiciousIPs.set(clientIp, { requests: 1, firstRequest: now, violations: 0 });
+    return next();
+  }
+  
+  const ipData = suspiciousIPs.get(clientIp);
+  
+  // ウィンドウリセット
+  if (now - ipData.firstRequest > windowMs) {
+    ipData.requests = 1;
+    ipData.firstRequest = now;
+    return next();
+  }
+  
+  ipData.requests++;
+  
+  // 異常な頻度でのアクセス検出（1分間に30回以上）
+  if (ipData.requests > 30) {
+    ipData.violations++;
+    console.log(`[security] Suspicious activity detected from IP: ${clientIp} (${ipData.requests} requests in 1 minute)`);
+    
+    if (ipData.violations >= 3) {
+      blockedIPs.add(clientIp);
+      console.log(`[security] IP permanently blocked: ${clientIp}`);
+    }
+    
+    return res.status(429).json({
+      error: "SUSPICIOUS_ACTIVITY",
+      message: "異常なアクセスパターンが検出されました"
+    });
+  }
+  
+  next();
+}
+
+// デモ用レート制限（強化版：1分間に2回まで）
+const demoRateLimit = new Map();
+
+function checkDemoRateLimit(req, res, next) {
+  const clientIp = req.headers['x-forwarded-for']?.split(',')[0] || 
+                  req.headers['x-real-ip'] || 
+                  req.connection.remoteAddress;
+  
+  const now = Date.now();
+  const windowMs = 60 * 1000; // 1分
+  const maxRequests = 2; // 厳格化：1分間に2回まで
+  
+  if (!demoRateLimit.has(clientIp)) {
+    demoRateLimit.set(clientIp, { count: 1, resetTime: now + windowMs });
+    return next();
+  }
+  
+  const rateData = demoRateLimit.get(clientIp);
+  
+  if (now > rateData.resetTime) {
+    demoRateLimit.set(clientIp, { count: 1, resetTime: now + windowMs });
+    return next();
+  }
+  
+  if (rateData.count >= maxRequests) {
+    console.log(`[security] Demo rate limit exceeded for IP: ${clientIp}`);
+    return res.status(429).json({
+      error: "DEMO_RATE_LIMIT_EXCEEDED",
+      message: "デモ機能の利用頻度が高すぎます。1分間に2回まで利用可能です",
+      retryAfter: Math.ceil((rateData.resetTime - now) / 1000)
+    });
+  }
+  
+  rateData.count++;
+  next();
+}
+
+// 全APIエンドポイントに悪意のあるアクティビティ検出を適用
+app.use('/api/', detectMaliciousActivity);
+
+// デモエンドポイント用追加セキュリティ
+function enhancedDemoSecurity(req, res, next) {
+  const userAgent = req.headers['user-agent'] || '';
+  const referer = req.headers['referer'] || '';
+  const origin = req.headers['origin'] || '';
+  
+  // 有効なブラウザからのアクセスかチェック
+  const validBrowserPatterns = [
+    /Mozilla.*Chrome/i,
+    /Mozilla.*Firefox/i,
+    /Mozilla.*Safari/i,
+    /Mozilla.*Edge/i
+  ];
+  
+  const isValidBrowser = validBrowserPatterns.some(pattern => pattern.test(userAgent));
+  
+  if (!isValidBrowser && process.env.NODE_ENV === 'production') {
+    console.log(`[security] Invalid browser for demo access: ${userAgent}`);
+    return res.status(403).json({
+      error: "INVALID_CLIENT",
+      message: "デモ機能は有効なブラウザからのみ利用可能です"
+    });
+  }
+  
+  // 本番環境では適切なOriginからのアクセスかチェック
+  if (process.env.NODE_ENV === 'production') {
+    const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'https://unicus.top').split(',');
+    if (origin && !allowedOrigins.includes(origin)) {
+      console.log(`[security] Invalid origin for demo access: ${origin}`);
+      return res.status(403).json({
+        error: "INVALID_ORIGIN",
+        message: "不正なアクセス元からのリクエストです"
+      });
+    }
+  }
+  
+  next();
+}
+
+app.post("/api/demo/generate", enhancedDemoSecurity, checkDemoRateLimit, async (req, res) => {
+  try {
+    // IPアドレスを取得（プロキシ経由も考慮）
+    const clientIp = req.headers['x-forwarded-for']?.split(',')[0] || 
+                    req.headers['x-real-ip'] || 
+                    req.connection.remoteAddress;
+    
+    // デバイス情報を取得（フィンガープリンティング）
+    const userAgent = req.headers['user-agent'] || '';
+    const acceptLanguage = req.headers['accept-language'] || '';
+    const acceptEncoding = req.headers['accept-encoding'] || '';
+    
+    // 複数の識別子を生成（不正使用防止強化）
+    const deviceFingerprint = Buffer.from(
+      userAgent + acceptLanguage + acceptEncoding + (req.headers['accept'] || '')
+    ).toString('base64').substring(0, 32);
+    
+    const ipHash = Buffer.from(clientIp).toString('base64').substring(0, 16);
+    const sessionFingerprint = Buffer.from(
+      userAgent + clientIp + (req.headers['x-forwarded-for'] || '') + acceptLanguage
+    ).toString('base64').substring(0, 24);
+    
+    // 追加の不正使用検出
+    const timeBasedFingerprint = Buffer.from(
+      clientIp + Math.floor(Date.now() / (24 * 60 * 60 * 1000)).toString() // 日単位
+    ).toString('base64').substring(0, 20);
+    
+    // 複数の識別子で制限チェック（強化版）
+    const identifiers = [
+      { identifier: clientIp, type: 'ip' },
+      { identifier: deviceFingerprint, type: 'device' },
+      { identifier: ipHash, type: 'ip_hash' },
+      { identifier: timeBasedFingerprint, type: 'time_based' },
+      { identifier: sessionFingerprint.substring(0, 16), type: 'session' }
+    ];
+    
+    // アクセス許可チェック
+    const accessCheck = await db.checkDemoAccess(identifiers);
+    if (!accessCheck.allowed) {
+      const errorMessages = {
+        'BLACKLISTED': '永久にデモ使用が制限されています',
+        'LIMIT_EXCEEDED': 'デモ使用回数（3回）を永久に超過しました'
+      };
+      
+      console.log(`[demo] Access denied: ${accessCheck.reason} for ${accessCheck.identifier} (${accessCheck.type})`);
+      
+      return res.status(403).json({
+        error: "DEMO_PERMANENTLY_BLOCKED",
+        message: errorMessages[accessCheck.reason] || '使用が制限されています',
+        suggestion: "デモ利用は3回まで永久制限です。継続利用には有料プランへの登録が必要です",
+        isPermaBan: true,
+        reason: accessCheck.reason
+      });
+    }
+    
+    // デバイス情報を記録（不正防止用）
+    const deviceInfo = JSON.stringify({
+      userAgent,
+      language: acceptLanguage,
+      encoding: acceptEncoding,
+      ip: clientIp,
+      timestamp: new Date().toISOString()
+    });
+    
+    // デモ使用を記録
+    const usageResults = await db.incrementDemoUsage(identifiers, deviceInfo);
+    
+    // 最大使用回数を取得
+    const maxCount = Math.max(...usageResults.map(r => r.count));
+    const DEMO_LIMIT = 3;
+    
+    // 画像生成処理を実行
+    const originalSend = res.json.bind(res);
+    res.json = function(data) {
+      // 成功時にデモ情報を追加
+      if (data && !data.error) {
+        const remainingUses = Math.max(0, DEMO_LIMIT - maxCount);
+        const isLastUse = maxCount >= DEMO_LIMIT;
+        
+        data.demoInfo = {
+          remainingUses,
+          totalLimit: DEMO_LIMIT,
+          currentUse: maxCount,
+          isLastUse,
+          message: isLastUse 
+            ? "⚠️ これがデモ最後の使用です。以後永久に制限されます"
+            : `デモ使用: 残り ${remainingUses} 回（永久制限）`
+        };
+        
+        if (isLastUse) {
+          console.log(`[demo] User permanently banned after ${maxCount} uses: ${clientIp}`);
+        }
+      }
+      return originalSend(data);
+    };
+    
+    // 通常の画像生成処理を実行
+    await generateImage(req, res);
+    
+  } catch (error) {
+    console.error('[demo] Demo generation error:', error);
+    res.status(500).json({
+      error: "DEMO_ERROR",
+      message: "デモ生成エラーが発生しました"
+    });
+  }
+});
+
+// デモ統計確認エンドポイント（管理者のみ）
+app.get("/api/admin/demo-stats", requireAuth, async (req, res) => {
+  try {
+    const adminEmails = (process.env.ADMIN_EMAILS || '').split(',').map(e => e.trim()).filter(Boolean);
+    
+    if (!adminEmails.includes(req.user.email)) {
+      return res.status(403).json({
+        error: "FORBIDDEN",
+        message: "管理者権限が必要です"
+      });
+    }
+    
+    const stats = await db.getDemoStats();
+    res.json({
+      success: true,
+      stats
+    });
+  } catch (error) {
+    console.error('[admin] Demo stats error:', error);
+    res.status(500).json({
+      error: "SERVER_ERROR",
+      message: "統計取得に失敗しました"
+    });
+  }
+});
 
 // ========================================
-// 再生成エンドポイント（画像生成と同じ処理）
+// 決済管理エンドポイント（管理者のみ）
 // ========================================
-app.post("/api/regenerate", generateImage);
+app.post("/api/admin/update-payment", requireAuth, async (req, res) => {
+  try {
+    // 管理者チェック
+    const adminEmails = (process.env.ADMIN_EMAILS || '').split(',').map(e => e.trim()).filter(Boolean);
+    
+    if (!adminEmails.includes(req.user.email)) {
+      return res.status(403).json({
+        error: "FORBIDDEN",
+        message: "管理者権限が必要です"
+      });
+    }
+    
+    const { userEmail, status, plan, amount, expirationDays, note } = req.body;
+    
+    if (!userEmail || !status) {
+      return res.status(400).json({
+        error: "INVALID_REQUEST",
+        message: "メールアドレスと支払いステータスが必要です"
+      });
+    }
+    
+    const targetUser = await db.getUserByEmail(userEmail);
+    if (!targetUser) {
+      // ユーザーが存在しない場合は新規作成
+      const userId = await db.createUser(userEmail, userEmail);
+      targetUser = { id: userId };
+    }
+    
+    // 有効期限を計算
+    let expirationDate = null;
+    if (status === 'paid' && expirationDays) {
+      const expiry = new Date();
+      expiry.setDate(expiry.getDate() + expirationDays);
+      expirationDate = expiry.toISOString();
+    }
+    
+    // 支払い情報を更新
+    await db.updatePaymentStatus(targetUser.id, {
+      status,
+      plan: plan || 'standard',
+      amount: amount || 0,
+      expirationDate,
+      note: note || `Updated by ${req.user.email}`
+    });
+    
+    console.log(`[admin] Payment status updated for ${userEmail}: ${status} by ${req.user.email}`);
+    
+    res.json({
+      success: true,
+      message: `${userEmail} の支払い状態を ${status} に更新しました`,
+      expirationDate
+    });
+  } catch (error) {
+    console.error('[admin] Payment update error:', error);
+    res.status(500).json({
+      error: "SERVER_ERROR",
+      message: "支払い状態の更新に失敗しました"
+    });
+  }
+});
+
+// ========================================
+// 開発者ロール管理エンドポイント（管理者のみ）
+// ========================================
+app.post("/api/admin/set-role", requireAuth, async (req, res) => {
+  try {
+    // 環境変数で管理者メールアドレスを指定（カンマ区切り）
+    const adminEmails = (process.env.ADMIN_EMAILS || '').split(',').map(e => e.trim()).filter(Boolean);
+    
+    if (!adminEmails.includes(req.user.email)) {
+      return res.status(403).json({
+        error: "FORBIDDEN",
+        message: "管理者権限が必要です"
+      });
+    }
+    
+    const { userEmail, role } = req.body;
+    
+    if (!userEmail || !role) {
+      return res.status(400).json({
+        error: "INVALID_REQUEST",
+        message: "メールアドレスとロールが必要です"
+      });
+    }
+    
+    if (!['user', 'developer'].includes(role)) {
+      return res.status(400).json({
+        error: "INVALID_ROLE",
+        message: "無効なロールです"
+      });
+    }
+    
+    const targetUser = await db.getUserByEmail(userEmail);
+    if (!targetUser) {
+      return res.status(404).json({
+        error: "USER_NOT_FOUND",
+        message: "指定されたユーザーが見つかりません"
+      });
+    }
+    
+    await db.setUserRole(targetUser.id, role);
+    console.log(`[admin] User ${userEmail} role changed to ${role} by ${req.user.email}`);
+    
+    res.json({
+      success: true,
+      message: `${userEmail} のロールを ${role} に変更しました`
+    });
+  } catch (error) {
+    console.error('[admin] Set role error:', error);
+    res.status(500).json({
+      error: "SERVER_ERROR",
+      message: "ロール変更に失敗しました"
+    });
+  }
+});
+
+// ========================================
+// 使用量統計エンドポイント
+// ========================================
+app.get("/api/usage/stats", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const todayUsage = await db.getTodayUsage(userId);
+    
+    const DAILY_ARTICLE_LIMIT = 5;
+    const DAILY_REGENERATION_LIMIT = 50;
+    
+    const currentArticleCount = todayUsage?.article_count || 0;
+    const currentRegenerationCount = todayUsage?.regeneration_count || 0;
+    
+    res.json({
+      success: true,
+      usage: {
+        today: {
+          articles: {
+            used: currentArticleCount,
+            limit: DAILY_ARTICLE_LIMIT,
+            remaining: DAILY_ARTICLE_LIMIT - currentArticleCount
+          },
+          regenerations: {
+            used: currentRegenerationCount,
+            limit: DAILY_REGENERATION_LIMIT,
+            remaining: DAILY_REGENERATION_LIMIT - currentRegenerationCount
+          }
+        },
+        isDeveloper: req.user?.role === 'developer'
+      }
+    });
+  } catch (error) {
+    console.error('[usage] Stats error:', error);
+    res.status(500).json({
+      error: "STATS_ERROR",
+      message: "使用量統計の取得に失敗しました"
+    });
+  }
+});
+
+// ========================================
+// 画像生成エンドポイント
+// ========================================
+app.post("/api/generate", requireAuth, checkUsageLimits, async (req, res) => {
+  try {
+    await generateImage(req, res);
+    // 成功時に使用量を更新
+    await incrementUsage(req, res, () => {});
+  } catch (error) {
+    console.error('[api] Generate error:', error);
+    if (!res.headersSent) {
+      res.status(500).json({
+        error: "GENERATION_ERROR",
+        message: "画像生成エラーが発生しました"
+      });
+    }
+  }
+});
+
+// ========================================
+// 再生成エンドポイント
+// ========================================
+app.post("/api/regenerate", requireAuth, checkUsageLimits, async (req, res) => {
+  try {
+    await generateImage(req, res);
+    // 成功時に使用量を更新
+    await incrementUsage(req, res, () => {});
+  } catch (error) {
+    console.error('[api] Regenerate error:', error);
+    if (!res.headersSent) {
+      res.status(500).json({
+        error: "REGENERATION_ERROR",
+        message: "再生成エラーが発生しました"
+      });
+    }
+  }
+});
 
 // ========================================
 // 後方互換性のため、古いエンドポイントも残す
 // ========================================
-app.post("/api/generate-test-image", generateImage);
+app.post("/api/generate-test-image", requireAuth, checkUsageLimits, async (req, res) => {
+  try {
+    await generateImage(req, res);
+    // 成功時に使用量を更新
+    await incrementUsage(req, res, () => {});
+  } catch (error) {
+    console.error('[api] Generate-test error:', error);
+    if (!res.headersSent) {
+      res.status(500).json({
+        error: "GENERATION_ERROR",
+        message: "画像生成エラーが発生しました"
+      });
+    }
+  }
+});
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
