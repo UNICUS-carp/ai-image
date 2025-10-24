@@ -121,7 +121,7 @@ async function splitContentWithRetry(content, hasHeadings, headings, apiKey) {
 // Gemini APIで本文分割（本体）
 // ========================================
 async function splitContentWithGemini(content, hasHeadings, headings, apiKey) {
-  const modelName = "gemini-1.5-flash";
+  const modelName = "gemini-2.5-flash";
   const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent`;
 
   let prompt;
@@ -334,22 +334,51 @@ function splitContentFallback(content, hasHeadings, headings) {
   const chunks = [];
   
   if (hasHeadings && headings.length > 0) {
-    // 小見出しありの場合：見出しベースで分割
-    console.log("[split] Fallback: Using heading-based splitting");
+    // 小見出しありの場合：見出しと対応する本文を抽出
+    console.log("[split] Fallback: Using heading-based splitting with content extraction");
     
-    // 6つ以上ある場合は最初の5つを使用（簡易版）
+    // 6つ以上ある場合は最初の5つを使用
     const selectedHeadings = headings.slice(0, 5);
     
+    // 本文を段落で分割して見出しとマッチング
+    const paragraphs = content.split(/\n\n+/).filter(p => p.trim().length > 0);
+    
     selectedHeadings.forEach((heading, index) => {
+      // この見出しに対応する本文を探す
+      let matchedContent = heading; // デフォルトは見出し
+      
+      // 見出しの後の段落を探す
+      for (let i = 0; i < paragraphs.length; i++) {
+        const paragraph = paragraphs[i];
+        
+        // この段落に見出しが含まれているかチェック
+        if (paragraph.includes(heading) || paragraph.includes(heading.replace(/^[0-9０-９①-⑩]+[\.、\s]/, ''))) {
+          // 次の段落があれば、それを本文として使用
+          if (i + 1 < paragraphs.length) {
+            const nextParagraph = paragraphs[i + 1];
+            
+            // 視覚的な描写を含む部分を探す
+            const visualKeywords = ['腕を上げ', '痛み', '着る', '姿勢', 'ストレッチ', '運動', '座っ', '立っ', '歩', '動作', '手', '肩', '首', '背中'];
+            
+            if (visualKeywords.some(keyword => nextParagraph.includes(keyword))) {
+              matchedContent = nextParagraph.substring(0, 300); // 300字まで
+            } else if (nextParagraph.length > 0) {
+              matchedContent = nextParagraph.substring(0, 200); // 200字まで
+            }
+          }
+          break;
+        }
+      }
+      
       chunks.push({
         index,
-        text: heading, // 見出しをそのまま画像生成に使用
-        charCount: heading.length,
+        text: matchedContent,
+        charCount: matchedContent.length,
         heading: heading
       });
     });
     
-    console.log(`[split] Fallback created ${chunks.length} chunks from headings`);
+    console.log(`[split] Fallback created ${chunks.length} chunks with content extraction`);
     
   } else {
     // 小見出しなしの場合：段落ベースで分割
