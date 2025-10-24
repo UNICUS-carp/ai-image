@@ -8,7 +8,9 @@ class Database {
 
   async initialize() {
     return new Promise((resolve, reject) => {
-      this.db = new sqlite3.Database(':memory:', (err) => {
+      // 永続化データベース（Railway対応）
+      const dbPath = process.env.DATABASE_PATH || './illustauto.db';
+      this.db = new sqlite3.Database(dbPath, (err) => {
         if (err) {
           console.error('[db] Failed to initialize database:', err);
           reject(err);
