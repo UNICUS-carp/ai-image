@@ -88,10 +88,16 @@ app.post("/api/split-content", async (req, res) => {
     console.log("[split] OpenAI not available, trying Gemini API...");
     const result = await splitContentWithRetry(content, hasHeadings, headings, GEMINI_API_KEY);
     return res.json(result);
-  } catch (error) {
-    console.error("[split] ERROR: All AI attempts failed, using fallback");
-    const fallbackResult = splitContentFallback(content, hasHeadings, headings);
-    return res.json(fallbackResult);
+  } catch (openaiError) {
+    console.log("[split] OpenAI failed, trying Gemini API...");
+    try {
+      const result = await splitContentWithRetry(content, hasHeadings, headings, GEMINI_API_KEY);
+      return res.json(result);
+    } catch (geminiError) {
+      console.error("[split] ERROR: All AI attempts failed, using fallback");
+      const fallbackResult = splitContentFallback(content, hasHeadings, headings);
+      return res.json(fallbackResult);
+    }
   }
 });
 
@@ -99,7 +105,7 @@ app.post("/api/split-content", async (req, res) => {
 // OpenAI APIで本文分割（高品質）
 // ========================================
 async function splitContentWithOpenAI(content, hasHeadings, headings) {
-  console.log("[split] Using OpenAI GPT-4 for content analysis");
+  console.log("[split] Using OpenAI GPT-4.1-mini for content analysis");
   
   let systemPrompt, userPrompt;
   
@@ -170,13 +176,14 @@ ${content}
   }
 
   const requestBody = {
-    model: "gpt-4",
+    model: "gpt-4.1-mini",
     messages: [
       { role: "system", content: systemPrompt },
       { role: "user", content: userPrompt }
     ],
     temperature: 0.3,
-    max_tokens: 4000
+    max_tokens: 3000,
+    response_format: { type: "json_object" }
   };
 
   console.log("[split] Sending request to OpenAI API...");
@@ -238,7 +245,7 @@ ${content}
 
     return {
       success: true,
-      method: "openai-gpt4",
+      method: "openai-gpt4.1-mini",
       chunks,
       totalChunks: chunks.length,
       elapsed
