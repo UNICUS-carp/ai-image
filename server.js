@@ -121,7 +121,7 @@ async function splitContentWithRetry(content, hasHeadings, headings, apiKey) {
 // Gemini APIで本文分割（本体）
 // ========================================
 async function splitContentWithGemini(content, hasHeadings, headings, apiKey) {
-  const modelName = "gemini-1.5-flash";
+  const modelName = "gemini-1.5-flash-latest";
   const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent`;
 
   let prompt;
@@ -301,67 +301,95 @@ ${content}
 // ========================================
 function splitContentFallback(content, hasHeadings, headings) {
   console.log("[split] Using fallback (rule-based) splitting");
+  console.log(`[split] hasHeadings: ${hasHeadings}, headings count: ${headings.length}`);
 
-  const TARGET_LENGTH = 200;
-  const MAX_LENGTH = 400;
   const chunks = [];
   
-  // 段落で分割
-  const paragraphs = content.split(/\n\n+/).filter(p => p.trim().length > 0);
-  
-  let currentChunk = "";
-  
-  for (const paragraph of paragraphs) {
-    if (currentChunk.length + paragraph.length <= MAX_LENGTH) {
-      currentChunk += (currentChunk ? "\n\n" : "") + paragraph;
-    } else {
-      if (currentChunk) {
-        chunks.push(currentChunk);
-      }
-      
-      // 段落が長すぎる場合は文で分割
-      if (paragraph.length > MAX_LENGTH) {
-        const sentences = paragraph.split(/[。！？]/);
-        let tempChunk = "";
-        
-        for (const sentence of sentences) {
-          if (!sentence.trim()) continue;
-          
-          const sentenceWithPunct = sentence + (paragraph[sentence.length] || "");
-          
-          if (tempChunk.length + sentenceWithPunct.length <= MAX_LENGTH) {
-            tempChunk += sentenceWithPunct;
-          } else {
-            if (tempChunk) chunks.push(tempChunk);
-            tempChunk = sentenceWithPunct;
-          }
+  if (hasHeadings && headings.length > 0) {
+    // 小見出しありの場合：見出しベースで分割
+    console.log("[split] Fallback: Using heading-based splitting");
+    
+    // 6つ以上ある場合は最初の5つを使用（簡易版）
+    const selectedHeadings = headings.slice(0, 5);
+    
+    selectedHeadings.forEach((heading, index) => {
+      chunks.push({
+        index,
+        text: heading, // 見出しをそのまま画像生成に使用
+        charCount: heading.length,
+        heading: heading
+      });
+    });
+    
+    console.log(`[split] Fallback created ${chunks.length} chunks from headings`);
+    
+  } else {
+    // 小見出しなしの場合：段落ベースで分割
+    console.log("[split] Fallback: Using paragraph-based splitting");
+    
+    const TARGET_LENGTH = 200;
+    const MAX_LENGTH = 400;
+    
+    // 段落で分割
+    const paragraphs = content.split(/\n\n+/).filter(p => p.trim().length > 0);
+    
+    let currentChunk = "";
+    
+    for (const paragraph of paragraphs) {
+      if (currentChunk.length + paragraph.length <= MAX_LENGTH) {
+        currentChunk += (currentChunk ? "\n\n" : "") + paragraph;
+      } else {
+        if (currentChunk) {
+          chunks.push(currentChunk);
         }
         
-        if (tempChunk) currentChunk = tempChunk;
-      } else {
-        currentChunk = paragraph;
+        // 段落が長すぎる場合は文で分割
+        if (paragraph.length > MAX_LENGTH) {
+          const sentences = paragraph.split(/[。！？]/);
+          let tempChunk = "";
+          
+          for (const sentence of sentences) {
+            if (!sentence.trim()) continue;
+            
+            const sentenceWithPunct = sentence + (paragraph[sentence.length] || "");
+            
+            if (tempChunk.length + sentenceWithPunct.length <= MAX_LENGTH) {
+              tempChunk += sentenceWithPunct;
+            } else {
+              if (tempChunk) chunks.push(tempChunk);
+              tempChunk = sentenceWithPunct;
+            }
+          }
+          
+          if (tempChunk) currentChunk = tempChunk;
+        } else {
+          currentChunk = paragraph;
+        }
       }
     }
-  }
-  
-  if (currentChunk) {
-    chunks.push(currentChunk);
-  }
+    
+    if (currentChunk) {
+      chunks.push(currentChunk);
+    }
 
-  // 最大5チャンクに制限
-  const limitedChunks = chunks.slice(0, 5).map((text, index) => ({
-    index,
-    text,
-    charCount: text.length
-  }));
-
-  console.log(`[split] Fallback created ${limitedChunks.length} chunks`);
+    // 文字列配列をオブジェクト配列に変換
+    const formattedChunks = chunks.slice(0, 5).map((text, index) => ({
+      index,
+      text,
+      charCount: text.length
+    }));
+    
+    chunks.length = 0;
+    chunks.push(...formattedChunks);
+    
+    console.log(`[split] Fallback created ${chunks.length} chunks from paragraphs`);
+  }
 
   return {
     success: true,
     method: "fallback",
-    chunks: limitedChunks,
-    totalChunks: limitedChunks.length
+    chunks,
+    totalChunks: chunks.length
   };
 }
 
