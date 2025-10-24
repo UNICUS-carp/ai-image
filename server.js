@@ -7,6 +7,9 @@ app.use(express.json({ limit: "10mb" }));
 
 const MAX_CONTENT_LENGTH = 5000;
 
+// OpenAI API設定
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+
 // ========================================
 // デバッグ用：設定確認
 // ========================================
@@ -72,16 +75,181 @@ app.post("/api/split-content", async (req, res) => {
     });
   }
 
-  // Gemini APIで分割を試行（リトライ + フォールバック）
+  // 優先順位: OpenAI > Gemini > フォールバック
   try {
+    // まずOpenAI APIを試行
+    if (OPENAI_API_KEY) {
+      console.log("[split] Trying OpenAI API first...");
+      const openaiResult = await splitContentWithOpenAI(content, hasHeadings, headings);
+      return res.json(openaiResult);
+    }
+    
+    // OpenAI が利用できない場合はGemini APIを試行
+    console.log("[split] OpenAI not available, trying Gemini API...");
     const result = await splitContentWithRetry(content, hasHeadings, headings, GEMINI_API_KEY);
     return res.json(result);
   } catch (error) {
-    console.error("[split] ERROR: All attempts failed, using fallback");
+    console.error("[split] ERROR: All AI attempts failed, using fallback");
     const fallbackResult = splitContentFallback(content, hasHeadings, headings);
     return res.json(fallbackResult);
   }
 });
+
+// ========================================
+// OpenAI APIで本文分割（高品質）
+// ========================================
+async function splitContentWithOpenAI(content, hasHeadings, headings) {
+  console.log("[split] Using OpenAI GPT-4 for content analysis");
+  
+  let systemPrompt, userPrompt;
+  
+  if (hasHeadings && headings.length > 0) {
+    systemPrompt = `あなたは日本語の記事を分析し、画像生成に適した重要で視覚的な場面を抽出する専門家です。
+
+記事から各見出しに対応する本文の中で、最も視覚的に表現しやすく、記事の価値を伝える重要な場面を抽出してください。
+
+抽出の優先順位：
+1. 記事の主要テーマに直結する重要な場面
+2. 具体的な動作・行動・状況の描写
+3. 問題・解決・結果を示す場面
+4. 読者が理解・実践に必要な視覚的要素
+5. 感情移入できる日常的な場面
+
+必ずJSON形式で出力してください。`;
+
+    userPrompt = `【記事の見出し一覧】
+${headings.map((h, i) => `${i + 1}. ${h}`).join('\n')}
+
+【本文】
+${content}
+
+【要求】
+- 各見出しに対応する本文から、最も重要で視覚的な場面を抽出
+- 要約ではなく、原文から重要な部分をそのまま抽出
+- 6つ以上ある場合は、最も重要な5つの見出しを選択
+- 各抽出は100-400字程度
+
+出力形式：
+{
+  "chunks": [
+    {
+      "heading": "見出し名",
+      "text": "抽出した重要で視覚的な本文",
+      "importance": "この部分が重要な理由",
+      "visualElements": "主要な視覚要素（人物・場所・動作）"
+    }
+  ]
+}`;
+  } else {
+    systemPrompt = `あなたは日本語の記事を分析し、画像生成に適した重要で視覚的な場面を抽出する専門家です。
+
+記事の核心を理解し、最も価値のある視覚的場面を重要度順に抽出してください。単なる装飾的描写ではなく、記事の目的を達成するために不可欠な場面を選択してください。
+
+必ずJSON形式で出力してください。`;
+
+    userPrompt = `【本文】
+${content}
+
+【要求】
+- 記事の主要テーマと目的を理解
+- 最も重要で視覚的な場面を5つまで抽出
+- 要約ではなく、原文から重要な部分をそのまま抽出
+- 各抽出は100-400字程度
+- 問題→解決→結果の流れを意識
+
+出力形式：
+{
+  "chunks": [
+    {
+      "text": "抽出した重要で視覚的な本文",
+      "importance": "この部分が記事にとって重要な理由",
+      "visualElements": "主要な視覚要素（人物・場所・動作・状況）"
+    }
+  ]
+}`;
+  }
+
+  const requestBody = {
+    model: "gpt-4",
+    messages: [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userPrompt }
+    ],
+    temperature: 0.3,
+    max_tokens: 4000
+  };
+
+  console.log("[split] Sending request to OpenAI API...");
+  const startTime = Date.now();
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30000);
+
+  try {
+    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${OPENAI_API_KEY}`
+      },
+      body: JSON.stringify(requestBody),
+      signal: controller.signal
+    });
+
+    clearTimeout(timeout);
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`OpenAI API error: ${response.status} - ${errorText}`);
+    }
+
+    const data = await response.json();
+    const content = data.choices?.[0]?.message?.content;
+
+    if (!content) {
+      throw new Error("No content in OpenAI response");
+    }
+
+    console.log("[split] OpenAI response received:", content.substring(0, 200) + "...");
+
+    // JSONを抽出
+    let jsonText = content.trim();
+    if (jsonText.startsWith("```json")) {
+      jsonText = jsonText.replace(/^```json\s*/, "").replace(/\s*```$/, "");
+    } else if (jsonText.startsWith("```")) {
+      jsonText = jsonText.replace(/^```\s*/, "").replace(/\s*```$/, "");
+    }
+
+    const parsed = JSON.parse(jsonText);
+    
+    // 正規化
+    const chunks = parsed.chunks.map((chunk, index) => ({
+      index,
+      text: chunk.text || "",
+      charCount: (chunk.text || "").length,
+      heading: chunk.heading || `チャンク${index + 1}`,
+      importance: chunk.importance || "",
+      visualElements: chunk.visualElements || ""
+    }));
+
+    const elapsed = Date.now() - startTime;
+    console.log(`[split] ✅ OpenAI analysis completed in ${elapsed}ms`);
+    console.log(`[split] Extracted ${chunks.length} high-quality chunks`);
+
+    return {
+      success: true,
+      method: "openai-gpt4",
+      chunks,
+      totalChunks: chunks.length,
+      elapsed
+    };
+
+  } catch (error) {
+    clearTimeout(timeout);
+    console.error("[split] OpenAI API failed:", error.message);
+    throw error;
+  }
+}
 
 // ========================================
 // Gemini APIで本文分割（リトライ機能付き）
