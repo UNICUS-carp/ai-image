@@ -88,7 +88,7 @@ class PasskeyAuthenticator {
 
       const challengeRecord = await this.db.getChallenge(registrationResponse.response.clientDataJSON);
       if (!challengeRecord || challengeRecord.user_id !== userId) {
-        throw new Error('Invalid challenge');
+        throw new Error('Registration failed');
       }
 
       // 登録レスポンスを検証
@@ -203,7 +203,7 @@ class PasskeyAuthenticator {
       // チャレンジを取得
       const challengeRecord = await this.db.getChallenge(authenticationResponse.response.clientDataJSON);
       if (!challengeRecord) {
-        throw new Error('Invalid challenge');
+        throw new Error('Authentication failed');
       }
 
       // 認証レスポンスを検証
