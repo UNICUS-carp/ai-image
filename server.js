@@ -445,15 +445,21 @@ app.post("/api/auth/register/begin", async (req, res) => {
       });
     }
 
-    // 支払い状態をチェック
-    const paymentStatus = await db.checkPaymentStatus(email);
-    if (paymentStatus !== 'paid') {
-      return res.status(403).json({
-        error: "PAYMENT_REQUIRED",
-        message: "サービスのご利用には決済が必要です",
-        paymentStatus: paymentStatus || 'pending',
-        instruction: "決済完了後、Passkey登録が可能になります"
-      });
+    // 管理者の場合は決済チェックをスキップ
+    const adminEmails = process.env.ADMIN_EMAILS.split(',').map(e => e.trim());
+    const isAdmin = adminEmails.includes(email.toLowerCase());
+    
+    if (!isAdmin) {
+      // 支払い状態をチェック（一般ユーザーのみ）
+      const paymentStatus = await db.checkPaymentStatus(email);
+      if (paymentStatus !== 'paid') {
+        return res.status(403).json({
+          error: "PAYMENT_REQUIRED",
+          message: "サービスのご利用には決済が必要です",
+          paymentStatus: paymentStatus || 'pending',
+          instruction: "決済完了後、Passkey登録が可能になります"
+        });
+      }
     }
 
     const result = await auth.generateRegistrationOptions(email, displayName);
