@@ -8,6 +8,9 @@ import ConfigManager from "./config.js";
 
 const app = express();
 
+// Railway (プロキシ経由) での trust proxy設定
+app.set('trust proxy', true);
+
 // 設定管理システムの初期化
 const config = new ConfigManager();
 const configValidation = config.displayValidation();
