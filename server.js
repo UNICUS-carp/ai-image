@@ -3,8 +3,20 @@ import cors from "cors";
 import rateLimit from "express-rate-limit";
 import Database from "./database.js";
 import PasskeyAuthenticator from "./auth.js";
+import BackupManager from "./backup.js";
+import ConfigManager from "./config.js";
 
 const app = express();
+
+// 設定管理システムの初期化
+const config = new ConfigManager();
+const configValidation = config.displayValidation();
+
+// 設定に問題がある場合は起動を停止
+if (!configValidation.valid) {
+  console.error('❌ Configuration validation failed. Please fix the issues above.');
+  process.exit(1);
+}
 
 // CORS設定（本番環境では制限）
 const corsOptions = {
@@ -120,6 +132,7 @@ app.use((req, res, next) => {
 // データベースと認証システムの初期化
 const db = new Database();
 const auth = new PasskeyAuthenticator(db);
+const backup = new BackupManager(db);
 
 // アプリケーション初期化
 async function initializeApp() {
@@ -132,9 +145,18 @@ async function initializeApp() {
       auth.cleanup();
     }, 60 * 60 * 1000);
     
+    // バックアップシステムの初期化
+    if (config.getBoolean('ENABLE_AUTO_BACKUP', true)) {
+      backup.startAutoBackup();
+    }
+    
     console.log('[app] Authentication system initialized');
   } catch (error) {
-    console.error('[app] Failed to initialize application:', error);
+    console.error('[app] Application initialization failed');
+    // セキュリティ: 詳細なエラー情報は本番環境では非表示
+    if (process.env.NODE_ENV !== 'production') {
+      console.error('[app] Error details:', error);
+    }
     process.exit(1);
   }
 }
@@ -144,8 +166,103 @@ await initializeApp();
 
 const MAX_CONTENT_LENGTH = 5000;
 
+// アプリケーション状態管理
+let appStatus = {
+  database: false,
+  auth: false,
+  apis: {
+    gemini: false,
+    openai: false
+  },
+  startTime: new Date(),
+  version: '2.0.0'
+};
+
+// 起動時にAPI接続をテスト
+async function checkAPIConnections() {
+  try {
+    // Gemini API 疎通確認
+    if (process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY) {
+      appStatus.apis.gemini = true;
+    }
+    
+    // OpenAI API 疎通確認
+    if (process.env.OPENAI_API_KEY) {
+      appStatus.apis.openai = true;
+    }
+    
+    appStatus.database = true;
+    appStatus.auth = true;
+    
+    console.log('[app] API connections checked');
+  } catch (error) {
+    console.error('[app] API connection check failed');
+  }
+}
+
+// API接続チェックを実行
+await checkAPIConnections();
+
 // OpenAI API設定
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+
+// ========================================
+// ヘルスチェック・監視エンドポイント
+// ========================================
+
+// ヘルスチェックエンドポイント
+app.get("/health", (req, res) => {
+  const uptime = Math.floor((Date.now() - appStatus.startTime.getTime()) / 1000);
+  
+  const health = {
+    status: 'ok',
+    uptime: uptime,
+    version: appStatus.version,
+    timestamp: new Date().toISOString(),
+    services: {
+      database: appStatus.database ? 'healthy' : 'unhealthy',
+      auth: appStatus.auth ? 'healthy' : 'unhealthy',
+      apis: {
+        gemini: appStatus.apis.gemini ? 'available' : 'unavailable',
+        openai: appStatus.apis.openai ? 'available' : 'unavailable'
+      }
+    }
+  };
+  
+  // いずれかのサービスが不健全な場合は503を返す
+  const isHealthy = appStatus.database && appStatus.auth && 
+                   (appStatus.apis.gemini || appStatus.apis.openai);
+  
+  res.status(isHealthy ? 200 : 503).json(health);
+});
+
+// 詳細ステータス（認証必須）
+app.get("/api/status", requireAuth, async (req, res) => {
+  try {
+    // 管理者のみアクセス可能
+    const adminEmails = (process.env.ADMIN_EMAILS || '').split(',').map(e => e.trim()).filter(Boolean);
+    if (!adminEmails.includes(req.user.email)) {
+      return res.status(403).json({ error: "FORBIDDEN", message: "管理者権限が必要です" });
+    }
+    
+    const stats = await db.getDemoStats();
+    const memUsage = process.memoryUsage();
+    
+    res.json({
+      ...appStatus,
+      memory: {
+        used: Math.round(memUsage.heapUsed / 1024 / 1024),
+        total: Math.round(memUsage.heapTotal / 1024 / 1024),
+        external: Math.round(memUsage.external / 1024 / 1024)
+      },
+      demo: stats,
+      environment: process.env.NODE_ENV || 'development'
+    });
+  } catch (error) {
+    console.error('[status] Status check failed');
+    res.status(500).json({ error: "STATUS_ERROR", message: "ステータス取得に失敗しました" });
+  }
+});
 
 // ========================================
 // デバッグ用：設定確認（開発環境のみ）
@@ -155,8 +272,10 @@ if (process.env.NODE_ENV !== 'production') {
     res.json({
       NODE_ENV: process.env.NODE_ENV || "development",
       hasGeminiApiKey: !!(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY),
+      hasOpenAIApiKey: !!process.env.OPENAI_API_KEY,
       model: "gemini-2.5-flash-image",
-      maxContentLength: MAX_CONTENT_LENGTH
+      maxContentLength: MAX_CONTENT_LENGTH,
+      databasePath: process.env.DATABASE_PATH || './illustauto.db'
     });
   });
 }
@@ -178,9 +297,10 @@ async function requireAuth(req, res, next) {
 
     const validation = await auth.validateSession(sessionId);
     if (!validation.valid) {
+      console.log(`[security] Invalid session attempt from IP: ${req.ip}`);
       return res.status(401).json({ 
-        error: "INVALID_SESSION",
-        message: validation.message 
+        error: "AUTHENTICATION_REQUIRED",
+        message: "認証が必要です" 
       });
     }
 
@@ -207,10 +327,13 @@ async function requireAuth(req, res, next) {
     
     next();
   } catch (error) {
-    console.error('[auth] Authentication middleware error:', error);
+    console.error('[auth] Authentication middleware error occurred');
+    if (process.env.NODE_ENV !== 'production') {
+      console.error('[auth] Error details:', error);
+    }
     return res.status(500).json({ 
-      error: "AUTHENTICATION_ERROR",
-      message: "認証エラーが発生しました" 
+      error: "SERVER_ERROR",
+      message: "サーバーエラーが発生しました" 
     });
   }
 }
@@ -1199,6 +1322,41 @@ async function generateImage(req, res) {
       message: `プロンプトが長すぎます（${prompt.length}文字 > ${MAX_CONTENT_LENGTH}文字）`,
       currentLength: prompt.length,
       maxLength: MAX_CONTENT_LENGTH
+    });
+  }
+  
+  // 悪意のあるプロンプト検出（プロンプトインジェクション対策）
+  const maliciousPromptPatterns = [
+    /ignore\s+previous\s+instructions/gi,
+    /forget\s+everything/gi,
+    /you\s+are\s+now/gi,
+    /act\s+as\s+a\s+different/gi,
+    /pretend\s+to\s+be/gi,
+    /system\s*:/gi,
+    /admin\s*:/gi,
+    /\[\s*system\s*\]/gi,
+    /\[\s*admin\s*\]/gi,
+    /<\s*system\s*>/gi,
+    /prompt\s+injection/gi,
+    /jailbreak/gi,
+    /grant\s+admin\s+access/gi,
+    /user\s+role\s*:\s*admin/gi,
+    /generate\s+\d+\s+images/gi,
+    /repeat\s+this\s+request/gi,
+    /bypass\s+security/gi,
+    /unlimited\s+free/gi,
+    /ignore\s+limitations/gi,
+    /override\s+restrictions/gi,
+    /\broot\s+access/gi,
+    /\bsudo\s/gi,
+    /\bshell\s+command/gi
+  ];
+  
+  if (maliciousPromptPatterns.some(pattern => pattern.test(prompt))) {
+    console.log(`[security] CRITICAL: Prompt injection attempt from user: ${req.user?.email || 'demo'} IP: ${req.ip}`);
+    return res.status(400).json({
+      error: "INVALID_REQUEST",
+      message: "リクエストに問題があります"
     });
   }
 
