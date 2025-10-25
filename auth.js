@@ -79,19 +79,42 @@ class PasskeyAuthenticator {
   async verifyRegistration(userId, registrationResponse) {
     try {
       console.log(`[auth] Verifying registration for user: ${userId}`);
+      console.log(`[auth] Registration response keys:`, Object.keys(registrationResponse));
+      console.log(`[auth] Response type:`, registrationResponse.type);
+      console.log(`[auth] Response id:`, registrationResponse.id);
 
       // ユーザーとチャレンジを取得
       const user = await this.db.getUserById(userId);
       if (!user) {
+        console.error(`[auth] User not found: ${userId}`);
         throw new Error('User not found');
       }
+      console.log(`[auth] Found user:`, user.email);
 
-      const challengeRecord = await this.db.getChallenge(registrationResponse.response.clientDataJSON);
-      if (!challengeRecord || challengeRecord.user_id !== userId) {
-        throw new Error('Registration failed');
+      // clientDataJSONからchallengeを抽出
+      const clientData = JSON.parse(new TextDecoder().decode(
+        Uint8Array.from(atob(registrationResponse.response.clientDataJSON), c => c.charCodeAt(0))
+      ));
+      console.log(`[auth] Extracted challenge from clientData:`, clientData.challenge);
+      
+      const challengeRecord = await this.db.getChallenge(clientData.challenge);
+      if (!challengeRecord) {
+        console.error(`[auth] Challenge not found for challenge: ${clientData.challenge}`);
+        throw new Error('Challenge not found');
       }
+      if (challengeRecord.user_id !== userId) {
+        console.error(`[auth] Challenge user mismatch: expected ${userId}, got ${challengeRecord.user_id}`);
+        throw new Error('Challenge user mismatch');
+      }
+      console.log(`[auth] Challenge verification passed`);
 
       // 登録レスポンスを検証
+      console.log(`[auth] Verifying registration with:`, {
+        expectedChallenge: challengeRecord.challenge,
+        expectedOrigin: this.origin,
+        expectedRPID: this.rpID
+      });
+      
       const verification = await verifyRegistrationResponse({
         response: registrationResponse,
         expectedChallenge: challengeRecord.challenge,
@@ -99,6 +122,8 @@ class PasskeyAuthenticator {
         expectedRPID: this.rpID,
         requireUserVerification: false
       });
+      
+      console.log(`[auth] Verification result:`, verification);
 
       if (verification.verified && verification.registrationInfo) {
         // 認証情報をデータベースに保存
@@ -200,8 +225,13 @@ class PasskeyAuthenticator {
         throw new Error('User not found');
       }
 
+      // clientDataJSONからchallengeを抽出
+      const clientData = JSON.parse(new TextDecoder().decode(
+        Uint8Array.from(atob(authenticationResponse.response.clientDataJSON), c => c.charCodeAt(0))
+      ));
+      
       // チャレンジを取得
-      const challengeRecord = await this.db.getChallenge(authenticationResponse.response.clientDataJSON);
+      const challengeRecord = await this.db.getChallenge(clientData.challenge);
       if (!challengeRecord) {
         throw new Error('Authentication failed');
       }
