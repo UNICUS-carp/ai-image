@@ -9,7 +9,8 @@ import ConfigManager from "./config.js";
 const app = express();
 
 // Railway (プロキシ経由) での trust proxy設定
-app.set('trust proxy', true);
+// Railwayでは通常1プロキシ経由
+app.set('trust proxy', 1);
 
 // 設定管理システムの初期化
 const config = new ConfigManager();
