@@ -52,9 +52,11 @@ class PasskeyAuthenticator {
         attestationType: 'none',
         excludeCredentials,
         authenticatorSelection: {
-          authenticatorAttachment: 'platform',
+          // platformを指定するとiCloudが強制されるため、削除
+          // authenticatorAttachmentを指定しないことで、選択可能にする
           userVerification: 'preferred',
-          residentKey: 'preferred'
+          residentKey: 'required',  // Passkeyには必須
+          requireResidentKey: true   // WebAuthn Level 1との互換性
         },
         supportedAlgorithmIDs: [-7, -257]
       });
@@ -127,14 +129,20 @@ class PasskeyAuthenticator {
 
       if (verification.verified && verification.registrationInfo) {
         // 認証情報をデータベースに保存
-        const { credentialID, credentialPublicKey, counter } = verification.registrationInfo;
+        const { credentialID, credentialPublicKey, counter, credentialDeviceType, credentialBackedUp } = verification.registrationInfo;
+        
+        // Uint8ArrayをBase64に変換
+        const credentialIDBase64 = Buffer.from(credentialID).toString('base64');
+        const publicKeyBase64 = Buffer.from(credentialPublicKey).toString('base64');
+        
+        console.log(`[auth] Saving credential with ID (base64):`, credentialIDBase64);
         
         await this.db.saveCredential(userId, {
-          id: credentialID,
-          publicKey: credentialPublicKey,
+          id: credentialIDBase64,
+          publicKey: publicKeyBase64,
           counter,
-          deviceType: 'platform',
-          backedUp: false,
+          deviceType: credentialDeviceType || 'singleDevice',
+          backedUp: credentialBackedUp || false,
           transports: registrationResponse.response.transports || []
         });
 
@@ -210,14 +218,21 @@ class PasskeyAuthenticator {
   async verifyAuthentication(authenticationResponse) {
     try {
       console.log(`[auth] Verifying authentication`);
+      console.log(`[auth] Authentication response ID:`, authenticationResponse.id);
 
       const { id: credentialID } = authenticationResponse;
+      
+      // credentialIDはBase64エンコードされた文字列として渡される
+      // DBにもBase64で保存されているので、そのまま検索
+      console.log(`[auth] Looking for credential with ID:`, credentialID);
       
       // 認証情報を取得
       const credential = await this.db.getCredentialByCredentialId(credentialID);
       if (!credential) {
+        console.error(`[auth] Credential not found for ID:`, credentialID);
         throw new Error('Credential not found');
       }
+      console.log(`[auth] Found credential for user:`, credential.user_id);
 
       // ユーザー情報を取得
       const user = await this.db.getUserById(credential.user_id);
@@ -236,6 +251,12 @@ class PasskeyAuthenticator {
         throw new Error('Authentication failed');
       }
 
+      // Base64からUint8Arrayに変換
+      const credentialIDBytes = Buffer.from(credential.credential_id, 'base64');
+      const credentialPublicKeyBytes = Buffer.from(credential.credential_public_key, 'base64');
+      
+      console.log(`[auth] Converting credential from Base64 for verification`);
+      
       // 認証レスポンスを検証
       const verification = await verifyAuthenticationResponse({
         response: authenticationResponse,
@@ -243,10 +264,10 @@ class PasskeyAuthenticator {
         expectedOrigin: this.origin,
         expectedRPID: this.rpID,
         authenticator: {
-          credentialID: credential.credential_id,
-          credentialPublicKey: credential.credential_public_key,
+          credentialID: credentialIDBytes,
+          credentialPublicKey: credentialPublicKeyBytes,
           counter: credential.counter,
-          transports: credential.transports
+          transports: JSON.parse(credential.transports || '[]')
         },
         requireUserVerification: false
       });
