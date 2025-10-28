@@ -434,87 +434,59 @@ class EmailAuthenticator {
 
   async sendAuthCodeEmail(email, code) {
     try {
-      if (this.emailMode === 'smtp') {
-        // 実際のメール送信
-        const fromEmail = process.env.SMTP_FROM || process.env.SMTP_USER;
+      // Resend API での送信試行
+      if (process.env.RESEND_API_KEY) {
+        console.log(`[auth] Attempting Resend email to: ${email}`);
         
-        const mailOptions = {
-          from: `"IllustAuto" <${fromEmail}>`,
-          to: email,
-          subject: 'IllustAuto 認証コード',
-          html: `
-            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-              <div style="text-align: center; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; border-radius: 10px;">
-                <h1 style="margin: 0; font-size: 28px;">🎨 IllustAuto</h1>
-                <p style="margin: 10px 0 0 0; font-size: 16px;">AI画像生成サービス</p>
-              </div>
-              
-              <div style="background: #f8f9fa; padding: 30px; border-radius: 10px; margin: 20px 0; text-align: center;">
-                <h2 style="color: #333; margin: 0 0 20px 0;">認証コード</h2>
-                <div style="background: white; border: 2px dashed #667eea; border-radius: 8px; padding: 20px; margin: 20px 0;">
-                  <span style="font-size: 32px; font-weight: bold; color: #667eea; letter-spacing: 4px; font-family: 'Courier New', monospace;">${code}</span>
+        const response = await fetch('https://api.resend.com/emails', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${process.env.RESEND_API_KEY}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            from: 'IllustAuto <noreply@resend.dev>',
+            to: email,
+            subject: 'IllustAuto 認証コード',
+            html: `
+              <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+                <h2 style="color: #667eea;">🎨 IllustAuto 認証コード</h2>
+                <div style="background: #f8f9fa; padding: 20px; border-radius: 8px; text-align: center;">
+                  <p style="font-size: 18px; margin: 0;">認証コード</p>
+                  <p style="font-size: 32px; font-weight: bold; color: #667eea; letter-spacing: 4px; margin: 10px 0;">${code}</p>
+                  <p style="color: #666; font-size: 14px;">⏰ 有効期限: 5分間</p>
                 </div>
-                <p style="color: #666; margin: 20px 0 0 0;">
-                  ⏰ このコードは <strong>5分間</strong> 有効です<br>
-                  コードを入力してログインを完了してください
-                </p>
               </div>
-              
-              <div style="background: #fff3cd; border: 1px solid #ffeaa7; border-radius: 8px; padding: 20px; margin: 20px 0;">
-                <p style="margin: 0; color: #856404; font-size: 14px;">
-                  <strong>🔒 セキュリティについて</strong><br>
-                  このメールに心当たりがない場合は、このメールを削除してください。<br>
-                  認証コードは他の人と共有しないでください。
-                </p>
-              </div>
-              
-              <div style="text-align: center; padding: 20px; color: #666; font-size: 12px;">
-                <p>© 2024 IllustAuto. All rights reserved.</p>
-              </div>
-            </div>
-          `,
-          text: `
-IllustAuto 認証コード
+            `,
+            text: `IllustAuto 認証コード: ${code}\n\n有効期限: 5分間`
+          })
+        });
 
-認証コード: ${code}
-
-このコードは5分間有効です。
-ログインページでこのコードを入力してください。
-
-このメールに心当たりがない場合は、削除してください。
-
-© 2024 IllustAuto
-          `
-        };
-
-        const result = await this.mailer.sendMail(mailOptions);
-        console.log(`[auth] 📧 認証コードをメール送信しました: ${email} (MessageID: ${result.messageId})`);
-        
-      } else {
-        // コンソール出力モード（開発環境）
-        console.log('');
-        console.log('🔐=================================');
-        console.log('📧 IllustAuto 認証コード');
-        console.log('=================================');
-        console.log(`👤 ユーザー: ${email}`);
-        console.log(`🔑 認証コード: ${code}`);
-        console.log('⏰ 有効期限: 5分間');
-        console.log('=================================🔐');
-        console.log('');
-        
-        console.log(`[auth] 📧 認証コードをコンソールに出力しました: ${email}`);
+        if (response.ok) {
+          const result = await response.json();
+          console.log(`[auth] ✅ Resend email sent successfully: ${email} (ID: ${result.id})`);
+          return; // 成功時は終了
+        } else {
+          const error = await response.text();
+          console.log(`[auth] ❌ Resend API error: ${response.status} - ${error}`);
+        }
       }
     } catch (error) {
-      console.error('[auth] Email send error:', error);
-      // メール送信失敗の場合はコンソール出力にフォールバック
-      console.log('');
-      console.log('🚨 メール送信に失敗しました。コンソール出力にフォールバック:');
-      console.log(`👤 ユーザー: ${email}`);
-      console.log(`🔑 認証コード: ${code}`);
-      console.log('');
-      
-      // エラーを上位に伝播させない（認証コード生成自体は成功しているため）
+      console.log(`[auth] ❌ Resend connection error: ${error.message}`);
     }
+
+    // フォールバック: コンソール出力（既存の方式）
+    console.log('');
+    console.log('🔐=================================');
+    console.log('📧 IllustAuto 認証コード');
+    console.log('=================================');
+    console.log(`👤 ユーザー: ${email}`);
+    console.log(`🔑 認証コード: ${code}`);
+    console.log('⏰ 有効期限: 5分間');
+    console.log('=================================🔐');
+    console.log('');
+    
+    console.log(`[auth] 📧 フォールバック: 認証コードをコンソールに出力しました`);
   }
 
   // ========================================
