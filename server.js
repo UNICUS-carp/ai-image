@@ -69,7 +69,8 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 const basicLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15分
   max: 100, // 100リクエスト
-  message: { error: 'RATE_LIMITED', message: 'リクエストが多すぎます' }
+  message: { error: 'RATE_LIMITED', message: 'リクエストが多すぎます' },
+  trustProxy: 1 // Railway プロキシを信頼（1つのプロキシのみ）
 });
 
 app.use(basicLimiter);
