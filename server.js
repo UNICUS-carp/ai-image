@@ -285,8 +285,50 @@ if (process.env.NODE_ENV !== 'production') {
 }
 
 // ========================================
-// 認証ミドルウェア
+// 認証ミドルウェア（強化版）
 // ========================================
+
+// 認証失敗追跡（レート制限用）
+const authFailureTracker = new Map();
+
+function trackAuthFailure(ipAddress) {
+  const now = Date.now();
+  const windowMs = 15 * 60 * 1000; // 15分
+  
+  if (!authFailureTracker.has(ipAddress)) {
+    authFailureTracker.set(ipAddress, { count: 1, firstFailure: now });
+    return 1;
+  }
+  
+  const data = authFailureTracker.get(ipAddress);
+  
+  // ウィンドウリセット
+  if (now - data.firstFailure > windowMs) {
+    authFailureTracker.set(ipAddress, { count: 1, firstFailure: now });
+    return 1;
+  }
+  
+  data.count++;
+  return data.count;
+}
+
+function isAuthRateLimited(ipAddress) {
+  const data = authFailureTracker.get(ipAddress);
+  if (!data) return false;
+  
+  const now = Date.now();
+  const windowMs = 15 * 60 * 1000; // 15分
+  
+  // ウィンドウ外の場合はリセット
+  if (now - data.firstFailure > windowMs) {
+    authFailureTracker.delete(ipAddress);
+    return false;
+  }
+  
+  // 15分間に5回以上失敗した場合はブロック
+  return data.count >= 5;
+}
+
 async function requireAuth(req, res, next) {
   try {
     const sessionId = req.headers.authorization?.replace('Bearer ', '') || 
@@ -299,9 +341,20 @@ async function requireAuth(req, res, next) {
       });
     }
 
-    const validation = await auth.validateSession(sessionId);
+    // IPアドレスとUserAgentを取得
+    const clientIp = req.headers['x-forwarded-for']?.split(',')[0] || 
+                    req.headers['x-real-ip'] || 
+                    req.connection.remoteAddress;
+    const userAgent = req.headers['user-agent'];
+
+    // セッション検証（セキュリティ情報も含める）
+    const validation = await auth.validateSession(sessionId, userAgent, clientIp);
     if (!validation.valid) {
-      console.log(`[security] Invalid session attempt from IP: ${req.ip}`);
+      console.log(`[security] Invalid session attempt from IP: ${clientIp}`);
+      
+      // 失敗した認証試行をログに記録
+      await db.logAuthAction(null, 'failed_login', clientIp, userAgent, 'Invalid session');
+      
       return res.status(401).json({ 
         error: "AUTHENTICATION_REQUIRED",
         message: "認証が必要です" 
@@ -492,9 +545,26 @@ app.post("/api/auth/register/begin", async (req, res) => {
 // 登録完了
 app.post("/api/auth/register/complete", async (req, res) => {
   try {
+    const clientIp = req.headers['x-forwarded-for']?.split(',')[0] || 
+                    req.headers['x-real-ip'] || 
+                    req.connection.remoteAddress;
+    const userAgent = req.headers['user-agent'];
+    
+    // レート制限チェック
+    if (isAuthRateLimited(clientIp)) {
+      await db.logAuthAction(null, 'failed_login', clientIp, userAgent, 'Rate limited');
+      return res.status(429).json({
+        error: "RATE_LIMITED",
+        message: "認証試行回数が多すぎます。しばらく待ってから再試行してください"
+      });
+    }
+
     const { userId, registrationResponse } = req.body;
     
     if (!userId || !registrationResponse) {
+      const failureCount = trackAuthFailure(clientIp);
+      await db.logAuthAction(userId, 'failed_login', clientIp, userAgent, 'Missing parameters');
+      
       return res.status(400).json({
         error: "INVALID_REQUEST",
         message: "必要なパラメータが不足しています"
@@ -504,12 +574,18 @@ app.post("/api/auth/register/complete", async (req, res) => {
     const result = await auth.verifyRegistration(userId, registrationResponse);
     
     if (result.success) {
+      // 成功時は失敗カウンターをリセット
+      authFailureTracker.delete(clientIp);
+      
       res.json({
         success: true,
         verified: result.verified,
         message: result.message
       });
     } else {
+      const failureCount = trackAuthFailure(clientIp);
+      await db.logAuthAction(userId, 'failed_login', clientIp, userAgent, result.message);
+      
       res.status(400).json({
         error: "REGISTRATION_VERIFICATION_FAILED",
         message: result.message
@@ -517,6 +593,15 @@ app.post("/api/auth/register/complete", async (req, res) => {
     }
   } catch (error) {
     console.error('[auth] Registration complete error:', error);
+    
+    const clientIp = req.headers['x-forwarded-for']?.split(',')[0] || 
+                    req.headers['x-real-ip'] || 
+                    req.connection.remoteAddress;
+    const userAgent = req.headers['user-agent'];
+    
+    trackAuthFailure(clientIp);
+    await db.logAuthAction(null, 'failed_login', clientIp, userAgent, error.message);
+    
     res.status(500).json({
       error: "SERVER_ERROR",
       message: "サーバーエラーが発生しました"
@@ -554,9 +639,26 @@ app.post("/api/auth/authenticate/begin", async (req, res) => {
 // 認証完了
 app.post("/api/auth/authenticate/complete", async (req, res) => {
   try {
+    const clientIp = req.headers['x-forwarded-for']?.split(',')[0] || 
+                    req.headers['x-real-ip'] || 
+                    req.connection.remoteAddress;
+    const userAgent = req.headers['user-agent'];
+    
+    // レート制限チェック
+    if (isAuthRateLimited(clientIp)) {
+      await db.logAuthAction(null, 'failed_login', clientIp, userAgent, 'Rate limited');
+      return res.status(429).json({
+        error: "RATE_LIMITED",
+        message: "認証試行回数が多すぎます。しばらく待ってから再試行してください"
+      });
+    }
+
     const { authenticationResponse } = req.body;
     
     if (!authenticationResponse) {
+      const failureCount = trackAuthFailure(clientIp);
+      await db.logAuthAction(null, 'failed_login', clientIp, userAgent, 'Missing authentication response');
+      
       return res.status(400).json({
         error: "INVALID_REQUEST",
         message: "認証レスポンスが必要です"
@@ -566,6 +668,9 @@ app.post("/api/auth/authenticate/complete", async (req, res) => {
     const result = await auth.verifyAuthentication(authenticationResponse);
     
     if (result.success) {
+      // 成功時は失敗カウンターをリセット
+      authFailureTracker.delete(clientIp);
+      
       res.json({
         success: true,
         verified: result.verified,
@@ -574,6 +679,9 @@ app.post("/api/auth/authenticate/complete", async (req, res) => {
         message: result.message
       });
     } else {
+      const failureCount = trackAuthFailure(clientIp);
+      await db.logAuthAction(null, 'failed_login', clientIp, userAgent, result.message);
+      
       res.status(400).json({
         error: "AUTHENTICATION_VERIFICATION_FAILED",
         message: result.message
@@ -581,6 +689,15 @@ app.post("/api/auth/authenticate/complete", async (req, res) => {
     }
   } catch (error) {
     console.error('[auth] Authentication complete error:', error);
+    
+    const clientIp = req.headers['x-forwarded-for']?.split(',')[0] || 
+                    req.headers['x-real-ip'] || 
+                    req.connection.remoteAddress;
+    const userAgent = req.headers['user-agent'];
+    
+    trackAuthFailure(clientIp);
+    await db.logAuthAction(null, 'failed_login', clientIp, userAgent, error.message);
+    
     res.status(500).json({
       error: "SERVER_ERROR",
       message: "サーバーエラーが発生しました"
