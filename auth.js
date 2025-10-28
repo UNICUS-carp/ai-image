@@ -28,37 +28,15 @@ class EmailAuthenticator {
   }
 
   initializeMailer() {
-    // メール送信設定
+    // 開発/テスト用のダミーSMTP設定
     this.mailer = nodemailer.createTransport({
-      host: process.env.SMTP_HOST || 'smtp.gmail.com',
-      port: parseInt(process.env.SMTP_PORT) || 587,
-      secure: false, // STARTTLS for port 587
-      auth: {
-        user: process.env.SMTP_USER,
-        pass: process.env.SMTP_PASS
-      },
-      tls: {
-        rejectUnauthorized: false,
-        ciphers: 'SSLv3'
-      },
-      connectionTimeout: 60000, // 60秒タイムアウト
-      greetingTimeout: 30000, // 30秒グリーティングタイムアウト
-      socketTimeout: 60000, // 60秒ソケットタイムアウト
-      debug: false // デバッグ無効化
+      streamTransport: true,
+      newline: 'unix',
+      buffer: true
     });
 
-    // メール設定を検証
-    if (process.env.SMTP_USER && process.env.SMTP_PASS) {
-      this.mailer.verify((error, success) => {
-        if (error) {
-          console.error('[auth] SMTP configuration error:', error);
-        } else {
-          console.log('[auth] SMTP server ready');
-        }
-      });
-    } else {
-      console.warn('[auth] SMTP credentials not configured - email sending will fail');
-    }
+    console.log('[auth] Email authenticator initialized in console mode');
+    console.log('[auth] 🚨 認証コードはRailwayコンソールに出力されます');
   }
 
   // ========================================
@@ -424,62 +402,18 @@ class EmailAuthenticator {
   }
 
   async sendAuthCodeEmail(email, code) {
-    const emailTemplate = `
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="UTF-8">
-  <title>IllustAuto 認証コード</title>
-</head>
-<body style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-  <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0;">
-    <h1 style="margin: 0; font-size: 28px;">🎨 IllustAuto</h1>
-    <p style="margin: 10px 0 0 0; opacity: 0.9;">AI画像生成サービス</p>
-  </div>
-  <div style="background: white; padding: 40px; border: 1px solid #e0e0e0; border-top: none; border-radius: 0 0 10px 10px;">
-    <h2 style="color: #333; margin-top: 0;">認証コード</h2>
-    <p style="color: #666; margin-bottom: 30px;">以下の認証コードを入力してログインを完了してください：</p>
+    // 🚨 コンソール出力モード（Railway SMTP制限回避）
+    console.log('');
+    console.log('🔐=================================');
+    console.log('📧 IllustAuto 認証コード');
+    console.log('=================================');
+    console.log(`👤 ユーザー: ${email}`);
+    console.log(`🔑 認証コード: ${code}`);
+    console.log('⏰ 有効期限: 5分間');
+    console.log('=================================🔐');
+    console.log('');
     
-    <div style="background: #f8f9fa; border: 2px solid #667eea; padding: 25px; text-align: center; border-radius: 10px; margin: 30px 0;">
-      <div style="font-size: 32px; font-weight: bold; letter-spacing: 8px; color: #667eea; font-family: 'Courier New', monospace;">
-        ${code}
-      </div>
-    </div>
-    
-    <div style="background: #fff3cd; border: 1px solid #ffeaa7; padding: 15px; border-radius: 8px; margin: 20px 0;">
-      <p style="margin: 0; color: #856404; font-size: 14px;">
-        ⚠️ <strong>重要:</strong><br>
-        • このコードは<strong>5分間</strong>有効です<br>
-        • 第三者と共有しないでください<br>
-        • このメールに心当たりがない場合は削除してください
-      </p>
-    </div>
-    
-    <hr style="border: none; border-top: 1px solid #e0e0e0; margin: 30px 0;">
-    
-    <p style="color: #999; font-size: 12px; text-align: center; margin: 0;">
-      このメールはIllustAutoから自動送信されています。<br>
-      返信はできませんのでご了承ください。
-    </p>
-  </div>
-</body>
-</html>
-    `;
-
-    const mailOptions = {
-      from: `"IllustAuto" <${process.env.SMTP_USER}>`,
-      to: email,
-      subject: '[IllustAuto] ログイン認証コード',
-      html: emailTemplate
-    };
-
-    if (!process.env.SMTP_USER || !process.env.SMTP_PASS) {
-      console.log(`[auth] EMAIL NOT SENT (SMTP not configured): Code ${code} for ${email}`);
-      return;
-    }
-
-    await this.mailer.sendMail(mailOptions);
-    console.log(`[auth] Email sent to: ${email}`);
+    console.log(`[auth] 📧 認証コードをコンソールに出力しました: ${email}`);
   }
 
   // ========================================
