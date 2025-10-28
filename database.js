@@ -292,10 +292,19 @@ class SecureDatabase {
   async verifyAuthCode(email, code) {
     const emailHash = this.hashEmail(email);
     
+    // 現在時刻をJavaScriptで取得してISO文字列にする（SQLiteとの一貫性を保つため）
+    const currentTime = new Date().toISOString();
+    
     const authCode = await this.get(
-      'SELECT * FROM auth_codes WHERE email_hash = ? AND used = FALSE AND expires_at > CURRENT_TIMESTAMP ORDER BY created_at DESC LIMIT 1',
-      [emailHash]
+      'SELECT * FROM auth_codes WHERE email_hash = ? AND used = FALSE AND expires_at > ? ORDER BY created_at DESC LIMIT 1',
+      [emailHash, currentTime]
     );
+    
+    console.log(`[db] verifyAuthCode - email: ${email}, currentTime: ${currentTime}`);
+    console.log(`[db] verifyAuthCode - authCode found: ${!!authCode}`);
+    if (authCode) {
+      console.log(`[db] verifyAuthCode - expires_at: ${authCode.expires_at}, attempts: ${authCode.attempts}`);
+    }
     
     if (!authCode) {
       return { valid: false, reason: 'Code not found or expired' };
@@ -311,6 +320,8 @@ class SecureDatabase {
     
     // コードを検証
     const isValid = await this.verifyCode(code, authCode.code_hash);
+    
+    console.log(`[db] verifyAuthCode - code verification result: ${isValid}`);
     
     if (isValid) {
       // 使用済みにマーク
@@ -377,7 +388,12 @@ class SecureDatabase {
         return { allowed: true, count: existing.count + 1 };
       }
     } else {
-      // 新しいウィンドウを作成
+      // 既存のエントリをクリーンアップしてから新規作成
+      await this.run(
+        'DELETE FROM rate_limits WHERE identifier = ? AND identifier_type = ? AND action = ?',
+        [identifier, identifierType, action]
+      );
+      
       const id = uuidv4();
       await this.run(
         'INSERT INTO rate_limits (id, identifier, identifier_type, action, window_start) VALUES (?, ?, ?, ?, ?)',
