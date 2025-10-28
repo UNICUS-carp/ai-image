@@ -1,9 +1,15 @@
 import express from 'express';
 import cors from 'cors';
 import rateLimit from 'express-rate-limit';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import SecureDatabase from './database.js';
 import EmailAuthenticator from './auth_resend.js';
 import ConfigManager from './config.js';
+
+// ES Modules用のdirname設定
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -83,6 +89,25 @@ const basicLimiter = rateLimit({
 });
 
 app.use(basicLimiter);
+
+// ========================================
+// 静的ファイル配信 (HTMLファイル用)
+// ========================================
+
+// 静的ファイルミドルウェア
+app.use(express.static('.', {
+  index: 'index_final.html',  // デフォルトファイル
+  setHeaders: (res, path) => {
+    if (path.endsWith('.html')) {
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    }
+  }
+}));
+
+// ルートアクセス時にindex_final.htmlを配信
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'index_final.html'));
+});
 
 // ========================================
 // 認証ミドルウェア
