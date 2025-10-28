@@ -4,7 +4,7 @@ import rateLimit from 'express-rate-limit';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import SecureDatabase from './database.js';
-import EmailAuthenticator from './auth_resend.js';
+import EmailAuthenticator from './auth.js';
 import ConfigManager from './config.js';
 
 // ES Modules用のdirname設定
