@@ -28,15 +28,46 @@ class EmailAuthenticator {
   }
 
   initializeMailer() {
-    // 開発/テスト用のダミーSMTP設定
-    this.mailer = nodemailer.createTransport({
-      streamTransport: true,
-      newline: 'unix',
-      buffer: true
-    });
-
-    console.log('[auth] Email authenticator initialized in console mode');
-    console.log('[auth] 🚨 認証コードはRailwayコンソールに出力されます');
+    // SMTP設定を環境変数から取得
+    const smtpHost = process.env.SMTP_HOST;
+    const smtpPort = process.env.SMTP_PORT || 587;
+    const smtpUser = process.env.SMTP_USER;
+    const smtpPass = process.env.SMTP_PASS;
+    
+    // 本番環境でSMTP設定が完全な場合は実際のメール送信
+    if (smtpHost && smtpUser && smtpPass) {
+      this.mailer = nodemailer.createTransport({
+        host: smtpHost,
+        port: parseInt(smtpPort),
+        secure: smtpPort == 465, // 465の場合はSSL、587の場合はSTARTTLS
+        auth: {
+          user: smtpUser,
+          pass: smtpPass
+        },
+        // ロリポップ用の追加設定
+        requireTLS: true,
+        tls: {
+          rejectUnauthorized: false // 開発環境用（本番では true にすることを推奨）
+        }
+      });
+      
+      this.emailMode = 'smtp';
+      console.log(`[auth] SMTP mail transport initialized: ${smtpHost}:${smtpPort}`);
+      console.log(`[auth] 📧 認証コードは実際のメールで送信されます`);
+    } else {
+      // 開発/テスト用のコンソール出力モード
+      this.mailer = nodemailer.createTransport({
+        streamTransport: true,
+        newline: 'unix',
+        buffer: true
+      });
+      
+      this.emailMode = 'console';
+      console.log('[auth] Email authenticator initialized in console mode');
+      console.log('[auth] 🚨 認証コードはRailwayコンソールに出力されます');
+      console.log('[auth] 💡 本番メール送信には以下の環境変数を設定してください:');
+      console.log('[auth]    SMTP_HOST, SMTP_USER, SMTP_PASS, SMTP_FROM');
+    }
   }
 
   // ========================================
@@ -402,18 +433,88 @@ class EmailAuthenticator {
   }
 
   async sendAuthCodeEmail(email, code) {
-    // 🚨 コンソール出力モード（Railway SMTP制限回避）
-    console.log('');
-    console.log('🔐=================================');
-    console.log('📧 IllustAuto 認証コード');
-    console.log('=================================');
-    console.log(`👤 ユーザー: ${email}`);
-    console.log(`🔑 認証コード: ${code}`);
-    console.log('⏰ 有効期限: 5分間');
-    console.log('=================================🔐');
-    console.log('');
-    
-    console.log(`[auth] 📧 認証コードをコンソールに出力しました: ${email}`);
+    try {
+      if (this.emailMode === 'smtp') {
+        // 実際のメール送信
+        const fromEmail = process.env.SMTP_FROM || process.env.SMTP_USER;
+        
+        const mailOptions = {
+          from: `"IllustAuto" <${fromEmail}>`,
+          to: email,
+          subject: 'IllustAuto 認証コード',
+          html: `
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+              <div style="text-align: center; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; border-radius: 10px;">
+                <h1 style="margin: 0; font-size: 28px;">🎨 IllustAuto</h1>
+                <p style="margin: 10px 0 0 0; font-size: 16px;">AI画像生成サービス</p>
+              </div>
+              
+              <div style="background: #f8f9fa; padding: 30px; border-radius: 10px; margin: 20px 0; text-align: center;">
+                <h2 style="color: #333; margin: 0 0 20px 0;">認証コード</h2>
+                <div style="background: white; border: 2px dashed #667eea; border-radius: 8px; padding: 20px; margin: 20px 0;">
+                  <span style="font-size: 32px; font-weight: bold; color: #667eea; letter-spacing: 4px; font-family: 'Courier New', monospace;">${code}</span>
+                </div>
+                <p style="color: #666; margin: 20px 0 0 0;">
+                  ⏰ このコードは <strong>5分間</strong> 有効です<br>
+                  コードを入力してログインを完了してください
+                </p>
+              </div>
+              
+              <div style="background: #fff3cd; border: 1px solid #ffeaa7; border-radius: 8px; padding: 20px; margin: 20px 0;">
+                <p style="margin: 0; color: #856404; font-size: 14px;">
+                  <strong>🔒 セキュリティについて</strong><br>
+                  このメールに心当たりがない場合は、このメールを削除してください。<br>
+                  認証コードは他の人と共有しないでください。
+                </p>
+              </div>
+              
+              <div style="text-align: center; padding: 20px; color: #666; font-size: 12px;">
+                <p>© 2024 IllustAuto. All rights reserved.</p>
+              </div>
+            </div>
+          `,
+          text: `
+IllustAuto 認証コード
+
+認証コード: ${code}
+
+このコードは5分間有効です。
+ログインページでこのコードを入力してください。
+
+このメールに心当たりがない場合は、削除してください。
+
+© 2024 IllustAuto
+          `
+        };
+
+        const result = await this.mailer.sendMail(mailOptions);
+        console.log(`[auth] 📧 認証コードをメール送信しました: ${email} (MessageID: ${result.messageId})`);
+        
+      } else {
+        // コンソール出力モード（開発環境）
+        console.log('');
+        console.log('🔐=================================');
+        console.log('📧 IllustAuto 認証コード');
+        console.log('=================================');
+        console.log(`👤 ユーザー: ${email}`);
+        console.log(`🔑 認証コード: ${code}`);
+        console.log('⏰ 有効期限: 5分間');
+        console.log('=================================🔐');
+        console.log('');
+        
+        console.log(`[auth] 📧 認証コードをコンソールに出力しました: ${email}`);
+      }
+    } catch (error) {
+      console.error('[auth] Email send error:', error);
+      // メール送信失敗の場合はコンソール出力にフォールバック
+      console.log('');
+      console.log('🚨 メール送信に失敗しました。コンソール出力にフォールバック:');
+      console.log(`👤 ユーザー: ${email}`);
+      console.log(`🔑 認証コード: ${code}`);
+      console.log('');
+      
+      // エラーを上位に伝播させない（認証コード生成自体は成功しているため）
+    }
   }
 
   // ========================================
