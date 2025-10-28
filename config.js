@@ -13,7 +13,12 @@ class ConfigManager {
       'ALLOWED_ORIGINS': 'Will use default https://unicus.top',
       'BACKUP_DIR': 'Will use default ./backups',
       'MAX_BACKUPS': 'Will keep 7 backups by default',
-      'BACKUP_INTERVAL_HOURS': 'Will backup every 24 hours by default'
+      'BACKUP_INTERVAL_HOURS': 'Will backup every 24 hours by default',
+      'SMTP_HOST': 'Will use console output for emails',
+      'SMTP_PORT': 'Will use default port 587',
+      'SMTP_USER': 'Will use console output for emails',
+      'SMTP_PASS': 'Will use console output for emails',
+      'SMTP_FROM': 'Will use default sender address'
     };
   }
 
