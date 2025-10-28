@@ -227,16 +227,16 @@ ${content}
     }
 
     const data = await response.json();
-    const content = data.choices?.[0]?.message?.content;
+    const responseContent = data.choices?.[0]?.message?.content;
     
-    if (!content) {
+    if (!responseContent) {
       throw new Error("No content in OpenAI response");
     }
 
-    console.log("[imageGen] OpenAI response received:", content.substring(0, 200) + "...");
+    console.log("[imageGen] OpenAI response received:", responseContent.substring(0, 200) + "...");
 
     try {
-      const parsed = JSON.parse(content);
+      const parsed = JSON.parse(responseContent);
       const chunks = parsed.chunks || [];
       
       return chunks.slice(0, Math.min(maxImages, 5)).map((chunk, index) => ({
