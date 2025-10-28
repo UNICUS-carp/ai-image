@@ -100,7 +100,7 @@ class EmailAuthenticator {
       const expiresAt = new Date(Date.now() + this.codeExpiry).toISOString();
       
       // データベースに保存
-      const codeId = await this.db.saveAuthCode(code, email, expiresAt, ipAddress, userAgent);
+      const codeId = await this.db.saveAuthCode(email, code, expiresAt, ipAddress, userAgent);
       
       // メール送信
       await this.sendAuthCodeEmail(email, code);
