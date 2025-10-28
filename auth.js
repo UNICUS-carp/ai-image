@@ -218,7 +218,9 @@ class EmailAuthenticator {
       }
 
       // 認証コード検証
+      console.log(`[auth] Starting code verification for email: ${email}, code: ${code}`);
       const verification = await this.db.verifyAuthCode(email, code);
+      console.log(`[auth] Code verification result:`, verification);
       
       if (!verification.valid) {
         // 失敗の場合、ログイン試行回数を増加
