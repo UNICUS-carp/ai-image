@@ -30,21 +30,13 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS
   ? process.env.ALLOWED_ORIGINS.split(',').map(origin => origin.trim())
   : ['https://unicus.top'];
 
+// 一時的に全てのOriginを許可（問題解決後に制限）
 app.use(cors({
-  origin: function (origin, callback) {
-    // 開発環境ではoriginがnullの場合も許可
-    if (!origin) return callback(null, true);
-    
-    if (allowedOrigins.indexOf(origin) !== -1) {
-      return callback(null, true);
-    } else {
-      console.log(`[CORS] Rejected origin: ${origin}`);
-      return callback(new Error('Not allowed by CORS'));
-    }
-  },
+  origin: true, // 全てのoriginを許可
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Session-ID']
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Session-ID', 'X-Requested-With'],
+  optionsSuccessStatus: 200
 }));
 
 // セキュリティヘッダー + 追加CORS設定
