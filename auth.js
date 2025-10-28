@@ -32,17 +32,19 @@ class EmailAuthenticator {
     this.mailer = nodemailer.createTransport({
       host: process.env.SMTP_HOST || 'smtp.gmail.com',
       port: parseInt(process.env.SMTP_PORT) || 587,
-      secure: parseInt(process.env.SMTP_PORT) === 465, // SSL for port 465, STARTTLS for 587
+      secure: false, // STARTTLS for port 587
       auth: {
         user: process.env.SMTP_USER,
         pass: process.env.SMTP_PASS
       },
       tls: {
-        rejectUnauthorized: false // Railway環境でのSSL証明書問題を回避
+        rejectUnauthorized: false,
+        ciphers: 'SSLv3'
       },
-      connectionTimeout: 10000, // 10秒タイムアウト
-      greetingTimeout: 5000, // 5秒グリーティングタイムアウト
-      socketTimeout: 10000 // 10秒ソケットタイムアウト
+      connectionTimeout: 60000, // 60秒タイムアウト
+      greetingTimeout: 30000, // 30秒グリーティングタイムアウト
+      socketTimeout: 60000, // 60秒ソケットタイムアウト
+      debug: false // デバッグ無効化
     });
 
     // メール設定を検証
