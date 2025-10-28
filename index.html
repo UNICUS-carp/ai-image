@@ -1,1 +1,528 @@
 
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IllustAuto - メール認証</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            padding: 40px;
+            max-width: 500px;
+            width: 100%;
+            text-align: center;
+        }
+        
+        .logo { font-size: 48px; margin-bottom: 10px; }
+        h1 { color: #667eea; margin-bottom: 10px; }
+        .subtitle { color: #666; margin-bottom: 30px; font-size: 14px; }
+        
+        .form-group {
+            margin-bottom: 20px;
+            text-align: left;
+        }
+        
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #333;
+        }
+        
+        input {
+            width: 100%;
+            padding: 15px;
+            border: 2px solid #e0e0e0;
+            border-radius: 10px;
+            font-size: 15px;
+            transition: border-color 0.3s;
+        }
+        
+        input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        .code-input {
+            font-family: 'Courier New', monospace;
+            font-size: 18px;
+            letter-spacing: 3px;
+            text-align: center;
+        }
+        
+        button {
+            width: 100%;
+            padding: 15px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            margin-bottom: 15px;
+        }
+        
+        button:hover:not(:disabled) {
+            background: #5a6fd8;
+            transform: translateY(-2px);
+        }
+        
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .secondary {
+            background: #f8f9fa;
+            color: #667eea;
+            border: 2px solid #667eea !important;
+        }
+        
+        .secondary:hover:not(:disabled) {
+            background: #667eea;
+            color: white;
+        }
+        
+        .status {
+            padding: 15px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            font-weight: 500;
+            display: none;
+        }
+        
+        .success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+        .error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+        .info { background: #cce7ff; color: #004085; border: 1px solid #b8daff; }
+        .warning { background: #fff3cd; color: #856404; border: 1px solid #ffeaa7; }
+        
+        .hidden { display: none !important; }
+        
+        .countdown {
+            font-size: 14px;
+            color: #666;
+            margin-top: 10px;
+        }
+        
+        .user-info {
+            background: #f8f9fa;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 20px;
+            text-align: left;
+        }
+        
+        .code-instruction {
+            background: #fff3cd;
+            border: 1px solid #ffeaa7;
+            border-radius: 10px;
+            padding: 15px;
+            margin-bottom: 20px;
+            font-size: 14px;
+        }
+        
+        .debug {
+            background: #f8f9fa;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            padding: 10px;
+            margin-top: 20px;
+            font-family: monospace;
+            font-size: 11px;
+            text-align: left;
+            max-height: 120px;
+            overflow-y: auto;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="logo">🎨</div>
+        <h1>IllustAuto</h1>
+        <p class="subtitle">AI画像生成サービス - メール認証</p>
+        
+        <div id="status" class="status"></div>
+        
+        <!-- メール入力フェーズ -->
+        <div id="emailPhase">
+            <div class="form-group">
+                <label for="email">📧 メールアドレス</label>
+                <input type="email" id="email" placeholder="your@email.com" required>
+            </div>
+            <button id="sendCode">🔑 認証コードを送信</button>
+        </div>
+        
+        <!-- コード入力フェーズ -->
+        <div id="codePhase" class="hidden">
+            <div class="code-instruction" id="codeInstruction">
+                <strong>📋 認証コードの確認:</strong><br>
+                <span id="emailModeText">メールボックスを確認してください</span>
+            </div>
+            
+            <div class="form-group">
+                <label for="code">🔢 認証コード（6桁）</label>
+                <input type="text" id="code" class="code-input" placeholder="123456" maxlength="6" required>
+                <div id="countdown" class="countdown"></div>
+            </div>
+            <button id="verifyCode">✅ ログイン</button>
+            <button id="resendCode" class="secondary">🔄 コードを再送信</button>
+            <button id="backToEmail" class="secondary">← メールアドレスに戻る</button>
+        </div>
+        
+        <!-- 成功フェーズ -->
+        <div id="successPhase" class="hidden">
+            <h2>🎉 ログイン成功！</h2>
+            <div id="userInfo" class="user-info"></div>
+            <button id="continueBtn">🚀 IllustAutoを使用</button>
+            <button id="logoutBtn" class="secondary">ログアウト</button>
+        </div>
+        
+        <!-- デバッグ情報（本番では非表示） -->
+        <div class="debug" style="display: none;">
+            <strong>🔧 接続状況:</strong>
+            <div id="debugLog">初期化中...</div>
+        </div>
+    </div>
+
+    <script>
+        // 設定
+        const BACKEND = 'https://illustauto-backend-production.up.railway.app';
+        
+        // グローバル変数
+        let countdownInterval = null;
+        let debugLogs = [];
+        let currentEmail = '';
+        
+        // DOM要素
+        const elements = {
+            status: document.getElementById('status'),
+            emailPhase: document.getElementById('emailPhase'),
+            codePhase: document.getElementById('codePhase'),
+            successPhase: document.getElementById('successPhase'),
+            email: document.getElementById('email'),
+            code: document.getElementById('code'),
+            sendCode: document.getElementById('sendCode'),
+            verifyCode: document.getElementById('verifyCode'),
+            resendCode: document.getElementById('resendCode'),
+            backToEmail: document.getElementById('backToEmail'),
+            countdown: document.getElementById('countdown'),
+            userInfo: document.getElementById('userInfo'),
+            continueBtn: document.getElementById('continueBtn'),
+            logoutBtn: document.getElementById('logoutBtn'),
+            debugLog: document.getElementById('debugLog')
+        };
+        
+        // デバッグログ（本番では最小限）
+        function debug(message) {
+            // 本番環境ではコンソールログのみ、UI表示なし
+            if (window.location.hostname === 'localhost' || window.location.hostname.includes('127.0.0.1')) {
+                const timestamp = new Date().toLocaleTimeString();
+                debugLogs.push(`[${timestamp}] ${message}`);
+                if (elements.debugLog) {
+                    elements.debugLog.innerHTML = debugLogs.slice(-5).join('<br>');
+                }
+            }
+            console.log(message);
+        }
+        
+        // ステータス表示
+        function showStatus(message, type = 'info') {
+            elements.status.textContent = message;
+            elements.status.className = `status ${type}`;
+            elements.status.style.display = 'block';
+            
+            // デバッグログは開発環境のみ
+            if (window.location.hostname === 'localhost' || window.location.hostname.includes('127.0.0.1')) {
+                debug(`Status [${type}]: ${message}`);
+            }
+            
+            if (type !== 'error') {
+                setTimeout(() => {
+                    elements.status.style.display = 'none';
+                }, 5000);
+            }
+        }
+        
+        // フェーズ切り替え
+        function showPhase(phase) {
+            elements.emailPhase.classList.toggle('hidden', phase !== 'email');
+            elements.codePhase.classList.toggle('hidden', phase !== 'code');
+            elements.successPhase.classList.toggle('hidden', phase !== 'success');
+            // debug(`Phase: ${phase}`); // 本番では非表示
+        }
+        
+        // メール検証
+        function isValidEmail(email) {
+            return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+        }
+        
+        // API リクエスト
+        function apiRequest(endpoint, options = {}) {
+            return new Promise((resolve, reject) => {
+                const xhr = new XMLHttpRequest();
+                xhr.open(options.method || 'GET', BACKEND + endpoint);
+                
+                if (options.headers) {
+                    Object.keys(options.headers).forEach(key => {
+                        xhr.setRequestHeader(key, options.headers[key]);
+                    });
+                }
+                
+                xhr.onload = function() {
+                    try {
+                        const data = JSON.parse(xhr.responseText);
+                        resolve({
+                            ok: xhr.status >= 200 && xhr.status < 300,
+                            status: xhr.status,
+                            data
+                        });
+                    } catch (e) {
+                        resolve({
+                            ok: false,
+                            status: xhr.status,
+                            data: { error: 'Parse error', raw: xhr.responseText }
+                        });
+                    }
+                };
+                
+                xhr.onerror = () => reject(new Error('Network error'));
+                xhr.send(options.body || null);
+            });
+        }
+        
+        // 認証コード送信
+        async function sendAuthCode() {
+            const email = elements.email.value.trim();
+            
+            if (!email) {
+                showStatus('メールアドレスを入力してください', 'error');
+                return;
+            }
+            
+            if (!isValidEmail(email)) {
+                showStatus('有効なメールアドレスを入力してください', 'error');
+                return;
+            }
+            
+            elements.sendCode.disabled = true;
+            elements.sendCode.textContent = '送信中...';
+            currentEmail = email;
+            
+            debug(`Sending auth code to: ${email}`);
+            
+            try {
+                const result = await apiRequest('/api/auth/request-code', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email })
+                });
+                
+                debug(`Send code result: ${result.status}`);
+                
+                if (result.ok && result.data.success) {
+                    showStatus('認証コードを送信しました！Railwayログで確認してください', 'success');
+                    showPhase('code');
+                    startCountdown(300); // 5分
+                    elements.code.focus();
+                } else {
+                    showStatus(result.data.message || 'コード送信に失敗しました', 'error');
+                }
+            } catch (error) {
+                debug(`Send code error: ${error.message}`);
+                showStatus(`エラー: ${error.message}`, 'error');
+            } finally {
+                elements.sendCode.disabled = false;
+                elements.sendCode.textContent = '🔑 認証コードを送信';
+            }
+        }
+        
+        // 認証コード検証
+        async function verifyAuthCode() {
+            const code = elements.code.value.trim();
+            
+            if (!code) {
+                showStatus('認証コードを入力してください', 'error');
+                return;
+            }
+            
+            if (!/^\d{6}$/.test(code)) {
+                showStatus('認証コードは6桁の数字で入力してください', 'error');
+                return;
+            }
+            
+            elements.verifyCode.disabled = true;
+            elements.verifyCode.textContent = '認証中...';
+            
+            debug(`Verifying code: ${code}`);
+            
+            try {
+                const result = await apiRequest('/api/auth/verify-code', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email: currentEmail, code })
+                });
+                
+                debug(`Verify result: ${result.status}`);
+                
+                if (result.ok && result.data.success) {
+                    showStatus('ログインに成功しました！', 'success');
+                    
+                    // トークン保存
+                    localStorage.setItem('illustauto_access_token', result.data.accessToken);
+                    localStorage.setItem('illustauto_refresh_token', result.data.refreshToken);
+                    localStorage.setItem('illustauto_user', JSON.stringify(result.data.user));
+                    
+                    // ユーザー情報表示（非表示）
+                    elements.userInfo.innerHTML = ``;
+                    
+                    showPhase('success');
+                    clearCountdown();
+                } else {
+                    showStatus(result.data.message || '認証に失敗しました', 'error');
+                }
+            } catch (error) {
+                debug(`Verify error: ${error.message}`);
+                showStatus(`エラー: ${error.message}`, 'error');
+            } finally {
+                elements.verifyCode.disabled = false;
+                elements.verifyCode.textContent = '✅ ログイン';
+            }
+        }
+        
+        // カウントダウン
+        function startCountdown(seconds) {
+            clearCountdown();
+            
+            const updateCountdown = () => {
+                if (seconds <= 0) {
+                    elements.countdown.textContent = '⚠️ コードが期限切れです。再送信してください。';
+                    elements.countdown.style.color = '#dc3545';
+                    clearCountdown();
+                    return;
+                }
+                
+                const minutes = Math.floor(seconds / 60);
+                const remainingSeconds = seconds % 60;
+                elements.countdown.textContent = `⏰ 有効期限: ${minutes}:${remainingSeconds.toString().padStart(2, '0')}`;
+                elements.countdown.style.color = '#666';
+                seconds--;
+            };
+            
+            updateCountdown();
+            countdownInterval = setInterval(updateCountdown, 1000);
+        }
+        
+        function clearCountdown() {
+            if (countdownInterval) {
+                clearInterval(countdownInterval);
+                countdownInterval = null;
+            }
+            elements.countdown.textContent = '';
+        }
+        
+        // ナビゲーション
+        function backToEmail() {
+            showPhase('email');
+            elements.email.value = currentEmail;
+            clearCountdown();
+        }
+        
+        function logout() {
+            localStorage.removeItem('illustauto_access_token');
+            localStorage.removeItem('illustauto_refresh_token');
+            localStorage.removeItem('illustauto_user');
+            showPhase('email');
+            elements.email.value = '';
+            elements.code.value = '';
+            currentEmail = '';
+            showStatus('ログアウトしました', 'info');
+        }
+        
+        function continueToApp() {
+            // メインアプリケーションに遷移
+            showStatus('IllustAutoアプリケーションを起動中...', 'info');
+            setTimeout(() => {
+                window.location.href = 'index.html';
+            }, 500);
+        }
+        
+        // イベントリスナー
+        elements.sendCode.addEventListener('click', sendAuthCode);
+        elements.verifyCode.addEventListener('click', verifyAuthCode);
+        elements.resendCode.addEventListener('click', sendAuthCode);
+        elements.backToEmail.addEventListener('click', backToEmail);
+        elements.logoutBtn.addEventListener('click', logout);
+        elements.continueBtn.addEventListener('click', continueToApp);
+        
+        // Enter キー対応
+        elements.email.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') sendAuthCode();
+        });
+        
+        elements.code.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') verifyAuthCode();
+        });
+        
+        // 数字のみ入力
+        elements.code.addEventListener('input', (e) => {
+            e.target.value = e.target.value.replace(/\D/g, '');
+        });
+        
+        // 初期化
+        document.addEventListener('DOMContentLoaded', async () => {
+            debug('🚀 IllustAuto 認証システム初期化');
+            debug(`Backend: ${BACKEND}`);
+            
+            // 接続テスト
+            try {
+                const result = await apiRequest('/health');
+                if (result.ok) {
+                    debug(`✅ Server connected: ${result.data.version}`);
+                    showStatus('サーバー接続確認済み', 'success');
+                } else {
+                    debug(`❌ Server error: ${result.status}`);
+                    showStatus('サーバー接続エラー', 'error');
+                }
+            } catch (error) {
+                debug(`❌ Connection failed: ${error.message}`);
+                showStatus('サーバー接続失敗', 'error');
+            }
+            
+            // 既存ログイン確認
+            const savedToken = localStorage.getItem('illustauto_access_token');
+            const savedUser = localStorage.getItem('illustauto_user');
+            
+            if (savedToken && savedUser) {
+                try {
+                    const user = JSON.parse(savedUser);
+                    elements.userInfo.innerHTML = ``;
+                    showPhase('success');
+                    showStatus('前回のログイン情報で復元しました', 'info');
+                    debug('Restored previous login');
+                } catch (e) {
+                    debug('Failed to restore login');
+                    logout();
+                }
+            }
+        });
+    </script>
+</body>
+</html>
