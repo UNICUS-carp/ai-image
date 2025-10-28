@@ -40,27 +40,32 @@ class Database {
         last_login DATETIME
       )`,
       
-      // WebAuthn認証情報テーブル
+      // WebAuthn認証情報テーブル（修正版）
       `CREATE TABLE IF NOT EXISTS user_credentials (
         id TEXT PRIMARY KEY,
         user_id TEXT NOT NULL,
         credential_id TEXT UNIQUE NOT NULL,
-        credential_public_key BLOB NOT NULL,
+        credential_public_key TEXT NOT NULL,  -- BLOBからTEXTに変更
         counter INTEGER NOT NULL DEFAULT 0,
         credential_device_type TEXT,
         credential_backed_up BOOLEAN DEFAULT FALSE,
         transports TEXT,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        last_used DATETIME,  -- 最後に使用された時刻を追加
         FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
       )`,
       
-      // セッションテーブル
+      // セッションテーブル（セキュリティ強化版）
       `CREATE TABLE IF NOT EXISTS user_sessions (
         id TEXT PRIMARY KEY,
         user_id TEXT NOT NULL,
         session_data TEXT,
         expires_at DATETIME NOT NULL,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        last_accessed DATETIME DEFAULT CURRENT_TIMESTAMP,  -- 最後のアクセス時刻
+        user_agent TEXT,     -- UserAgent情報
+        ip_address TEXT,     -- IPアドレス
+        is_active BOOLEAN DEFAULT TRUE,  -- セッションの有効性
         FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
       )`,
       
@@ -107,7 +112,21 @@ class Database {
         user_id TEXT,
         type TEXT NOT NULL,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        expires_at DATETIME NOT NULL
+        expires_at DATETIME NOT NULL,
+        ip_address TEXT,     -- チャレンジ作成時のIPアドレス
+        user_agent TEXT      -- チャレンジ作成時のUserAgent
+      )`,
+      
+      // 認証ログテーブル（セキュリティ監査用）
+      `CREATE TABLE IF NOT EXISTS auth_logs (
+        id TEXT PRIMARY KEY,
+        user_id TEXT,
+        action TEXT NOT NULL,  -- 'register', 'login', 'logout', 'failed_login'
+        ip_address TEXT,
+        user_agent TEXT,
+        details TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE SET NULL
       )`
     ];
 
@@ -115,7 +134,32 @@ class Database {
       await this.run(sql);
     }
     
+    // 既存テーブルの構造を更新（マイグレーション）
+    await this.migrateExistingTables();
+    
     console.log('[db] All tables created successfully');
+  }
+
+  // 既存テーブルのマイグレーション
+  async migrateExistingTables() {
+    try {
+      // user_credentialsテーブルの列追加
+      await this.run(`ALTER TABLE user_credentials ADD COLUMN last_used DATETIME`).catch(() => {});
+      
+      // user_sessionsテーブルの列追加
+      await this.run(`ALTER TABLE user_sessions ADD COLUMN last_accessed DATETIME DEFAULT CURRENT_TIMESTAMP`).catch(() => {});
+      await this.run(`ALTER TABLE user_sessions ADD COLUMN user_agent TEXT`).catch(() => {});
+      await this.run(`ALTER TABLE user_sessions ADD COLUMN ip_address TEXT`).catch(() => {});
+      await this.run(`ALTER TABLE user_sessions ADD COLUMN is_active BOOLEAN DEFAULT TRUE`).catch(() => {});
+      
+      // auth_challengesテーブルの列追加
+      await this.run(`ALTER TABLE auth_challenges ADD COLUMN ip_address TEXT`).catch(() => {});
+      await this.run(`ALTER TABLE auth_challenges ADD COLUMN user_agent TEXT`).catch(() => {});
+      
+      console.log('[db] Table migrations completed');
+    } catch (error) {
+      console.warn('[db] Migration warning (expected for new installs):', error.message);
+    }
   }
 
   // Promiseベースのクエリ実行
@@ -168,6 +212,10 @@ class Database {
       'INSERT INTO users (id, email, display_name) VALUES (?, ?, ?)',
       [userId, email, displayName]
     );
+    
+    // 認証ログを記録
+    await this.logAuthAction(userId, 'register', null, null, `User created: ${email}`);
+    
     return userId;
   }
 
@@ -381,13 +429,19 @@ class Database {
     );
     if (row) {
       row.transports = JSON.parse(row.transports || '[]');
+      
+      // 最後の使用時刻を更新
+      await this.run(
+        'UPDATE user_credentials SET last_used = CURRENT_TIMESTAMP WHERE credential_id = ?',
+        [credentialId]
+      );
     }
     return row;
   }
 
   async getUserCredentials(userId) {
     const rows = await this.all(
-      'SELECT * FROM user_credentials WHERE user_id = ?',
+      'SELECT * FROM user_credentials WHERE user_id = ? ORDER BY last_used DESC',
       [userId]
     );
     return rows.map(row => ({
@@ -398,7 +452,7 @@ class Database {
 
   async updateCredentialCounter(credentialId, newCounter) {
     await this.run(
-      'UPDATE user_credentials SET counter = ? WHERE credential_id = ?',
+      'UPDATE user_credentials SET counter = ?, last_used = CURRENT_TIMESTAMP WHERE credential_id = ?',
       [newCounter, credentialId]
     );
   }
@@ -407,28 +461,47 @@ class Database {
   // セッション管理
   // ========================================
 
-  async createSession(userId, sessionData, expiresAt) {
+  async createSession(userId, sessionData, expiresAt, userAgent = null, ipAddress = null) {
     const sessionId = uuidv4();
     await this.run(
-      'INSERT INTO user_sessions (id, user_id, session_data, expires_at) VALUES (?, ?, ?, ?)',
-      [sessionId, userId, JSON.stringify(sessionData), expiresAt]
+      `INSERT INTO user_sessions 
+       (id, user_id, session_data, expires_at, user_agent, ip_address) 
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [sessionId, userId, JSON.stringify(sessionData), expiresAt, userAgent, ipAddress]
     );
+    
+    // 認証ログを記録
+    await this.logAuthAction(userId, 'login', ipAddress, userAgent, 'Session created');
+    
     return sessionId;
   }
 
   async getSession(sessionId) {
     const row = await this.get(
-      'SELECT * FROM user_sessions WHERE id = ? AND expires_at > CURRENT_TIMESTAMP',
+      `SELECT * FROM user_sessions 
+       WHERE id = ? AND expires_at > CURRENT_TIMESTAMP AND is_active = TRUE`,
       [sessionId]
     );
     if (row) {
       row.session_data = JSON.parse(row.session_data);
+      
+      // 最後のアクセス時刻を更新
+      await this.run(
+        'UPDATE user_sessions SET last_accessed = CURRENT_TIMESTAMP WHERE id = ?',
+        [sessionId]
+      );
     }
     return row;
   }
 
   async deleteSession(sessionId) {
+    const session = await this.get('SELECT user_id FROM user_sessions WHERE id = ?', [sessionId]);
     await this.run('DELETE FROM user_sessions WHERE id = ?', [sessionId]);
+    
+    // 認証ログを記録
+    if (session) {
+      await this.logAuthAction(session.user_id, 'logout', null, null, 'Session deleted');
+    }
   }
 
   async cleanupExpiredSessions() {
@@ -442,10 +515,10 @@ class Database {
   // チャレンジ管理
   // ========================================
 
-  async saveChallenge(challenge, userId, type, expiresAt) {
+  async saveChallenge(challenge, userId, type, expiresAt, ipAddress = null, userAgent = null) {
     await this.run(
-      'INSERT INTO auth_challenges (challenge, user_id, type, expires_at) VALUES (?, ?, ?, ?)',
-      [challenge, userId, type, expiresAt]
+      'INSERT INTO auth_challenges (challenge, user_id, type, expires_at, ip_address, user_agent) VALUES (?, ?, ?, ?, ?, ?)',
+      [challenge, userId, type, expiresAt, ipAddress, userAgent]
     );
   }
 
@@ -465,6 +538,37 @@ class Database {
     if (result.changes > 0) {
       console.log(`[db] Cleaned up ${result.changes} expired challenges`);
     }
+  }
+
+  // ========================================
+  // 認証ログ管理（新機能）
+  // ========================================
+
+  async logAuthAction(userId, action, ipAddress = null, userAgent = null, details = null) {
+    const logId = uuidv4();
+    await this.run(
+      `INSERT INTO auth_logs (id, user_id, action, ip_address, user_agent, details) 
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [logId, userId, action, ipAddress, userAgent, details]
+    );
+  }
+
+  async getAuthLogs(userId, limit = 50) {
+    return await this.all(
+      `SELECT * FROM auth_logs WHERE user_id = ? 
+       ORDER BY created_at DESC LIMIT ?`,
+      [userId, limit]
+    );
+  }
+
+  async getFailedLoginAttempts(ipAddress, minutes = 15) {
+    const since = new Date(Date.now() - minutes * 60 * 1000).toISOString();
+    const result = await this.get(
+      `SELECT COUNT(*) as count FROM auth_logs 
+       WHERE action = 'failed_login' AND ip_address = ? AND created_at > ?`,
+      [ipAddress, since]
+    );
+    return result.count;
   }
 
   // ========================================
