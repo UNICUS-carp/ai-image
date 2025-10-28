@@ -1,535 +1,648 @@
-import jwt from 'jsonwebtoken';
-import nodemailer from 'nodemailer';
+import sqlite3 from 'sqlite3';
 import { v4 as uuidv4 } from 'uuid';
+import bcrypt from 'bcryptjs';
+import crypto from 'crypto';
 
-class EmailAuthenticator {
-  constructor(database) {
-    this.db = database;
-    this.jwtSecret = process.env.JWT_SECRET || 'your-super-secure-256-bit-secret-key-change-this';
-    this.jwtRefreshSecret = process.env.JWT_REFRESH_SECRET || 'your-refresh-secret-change-this';
-    
-    // JWT設定
-    this.jwtExpiry = '24h';
-    this.refreshExpiry = '7d';
-    
-    // 認証コード設定
-    this.codeExpiry = 5 * 60 * 1000; // 5分
-    this.codeRequestCooldown = 60 * 1000; // 1分
-    
-    // レート制限設定
-    this.rateLimit = {
-      codeRequest: { window: 15 * 60 * 1000, max: 3 }, // 15分で3回
-      authAttempt: { window: 15 * 60 * 1000, max: 5 }   // 15分で5回
-    };
-    
-    this.initializeMailer();
-    
-    console.log(`[auth] Email authenticator initialized`);
+class SecureDatabase {
+  constructor() {
+    this.db = null;
   }
 
-  initializeMailer() {
-    // SMTP設定を環境変数から取得
-    const smtpHost = process.env.SMTP_HOST;
-    const smtpPort = process.env.SMTP_PORT || 587;
-    const smtpUser = process.env.SMTP_USER;
-    const smtpPass = process.env.SMTP_PASS;
-    
-    // 本番環境でSMTP設定が完全な場合は実際のメール送信
-    if (smtpHost && smtpUser && smtpPass) {
-      this.mailer = nodemailer.createTransport({
-        host: smtpHost,
-        port: parseInt(smtpPort),
-        secure: smtpPort == 465, // 465の場合はSSL、587の場合はSTARTTLS
-        auth: {
-          user: smtpUser,
-          pass: smtpPass
-        },
-        // ロリポップ用の追加設定
-        requireTLS: true,
-        tls: {
-          rejectUnauthorized: false // 開発環境用（本番では true にすることを推奨）
+  async initialize() {
+    return new Promise((resolve, reject) => {
+      const dbPath = process.env.DATABASE_PATH || './illustauto_v2.db';
+      this.db = new sqlite3.Database(dbPath, (err) => {
+        if (err) {
+          console.error('[db] Failed to initialize database:', err);
+          reject(err);
+        } else {
+          console.log('[db] Database initialized successfully');
+          this.createTables().then(resolve).catch(reject);
         }
       });
-      
-      this.emailMode = 'smtp';
-      console.log(`[auth] SMTP mail transport initialized: ${smtpHost}:${smtpPort}`);
-      console.log(`[auth] 📧 認証コードは実際のメールで送信されます`);
-    } else {
-      // 開発/テスト用のコンソール出力モード
-      this.mailer = nodemailer.createTransport({
-        streamTransport: true,
-        newline: 'unix',
-        buffer: true
-      });
-      
-      this.emailMode = 'console';
-      console.log('[auth] Email authenticator initialized in console mode');
-      console.log('[auth] 🚨 認証コードはRailwayコンソールに出力されます');
-      console.log('[auth] 💡 本番メール送信には以下の環境変数を設定してください:');
-      console.log('[auth]    SMTP_HOST, SMTP_USER, SMTP_PASS, SMTP_FROM');
-    }
+    });
   }
 
-  // ========================================
-  // 認証コード送信
-  // ========================================
-
-  async requestAuthCode(email, ipAddress = null, userAgent = null) {
-    try {
-      email = email.toLowerCase().trim();
+  async createTables() {
+    const tables = [
+      // ユーザーテーブル（シンプル化・セキュア化）
+      `CREATE TABLE IF NOT EXISTS users (
+        id TEXT PRIMARY KEY,
+        email TEXT UNIQUE NOT NULL,
+        email_hash TEXT UNIQUE NOT NULL,
+        display_name TEXT,
+        role TEXT DEFAULT 'user',
+        payment_status TEXT DEFAULT 'pending',
+        payment_date DATETIME,
+        expiration_date DATETIME,
+        payment_plan TEXT,
+        payment_amount INTEGER,
+        payment_note TEXT,
+        login_attempts INTEGER DEFAULT 0,
+        locked_until DATETIME NULL,
+        email_verified BOOLEAN DEFAULT FALSE,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        last_login DATETIME,
+        last_ip TEXT
+      )`,
       
-      console.log(`[auth] Auth code requested for: ${email}`);
-
-      // 入力検証
-      if (!this.isValidEmail(email)) {
-        throw new Error('有効なメールアドレスを入力してください');
-      }
-
-      // ユーザーロック状態をチェック
-      if (await this.db.isUserLocked(email)) {
-        throw new Error('アカウントが一時的にロックされています。しばらく待ってから再試行してください');
-      }
-
-      // レート制限チェック（IP別）
-      if (ipAddress) {
-        const ipLimit = await this.db.checkRateLimit(
-          ipAddress, 'ip', 'code_request', 
-          this.rateLimit.codeRequest.window, 
-          this.rateLimit.codeRequest.max
-        );
-        
-        if (!ipLimit.allowed) {
-          const resetTime = Math.ceil((ipLimit.resetAt - new Date()) / 1000 / 60);
-          throw new Error(`認証コードの要求回数が多すぎます。${resetTime}分後に再試行してください`);
-        }
-      }
-
-      // レート制限チェック（メール別）
-      const emailLimit = await this.db.checkRateLimit(
-        this.db.hashEmail(email), 'email', 'code_request',
-        this.rateLimit.codeRequest.window,
-        this.rateLimit.codeRequest.max
-      );
+      // 認証コードテーブル
+      `CREATE TABLE IF NOT EXISTS auth_codes (
+        id TEXT PRIMARY KEY,
+        email_hash TEXT NOT NULL,
+        code_hash TEXT NOT NULL,
+        expires_at DATETIME NOT NULL,
+        used BOOLEAN DEFAULT FALSE,
+        attempts INTEGER DEFAULT 0,
+        ip_address TEXT,
+        user_agent TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )`,
       
-      if (!emailLimit.allowed) {
-        const resetTime = Math.ceil((emailLimit.resetAt - new Date()) / 1000 / 60);
-        throw new Error(`このメールアドレスの認証コード要求回数が多すぎます。${resetTime}分後に再試行してください`);
-      }
+      // JWTブラックリストテーブル
+      `CREATE TABLE IF NOT EXISTS jwt_blacklist (
+        id TEXT PRIMARY KEY,
+        token_jti TEXT UNIQUE NOT NULL,
+        user_id TEXT NOT NULL,
+        expires_at DATETIME NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+      )`,
+      
+      // セキュリティログテーブル
+      `CREATE TABLE IF NOT EXISTS security_logs (
+        id TEXT PRIMARY KEY,
+        user_id TEXT,
+        action TEXT NOT NULL,
+        ip_address TEXT,
+        user_agent TEXT,
+        details TEXT,
+        risk_level TEXT DEFAULT 'low',
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE SET NULL
+      )`,
+      
+      // レート制限テーブル
+      `CREATE TABLE IF NOT EXISTS rate_limits (
+        id TEXT PRIMARY KEY,
+        identifier TEXT NOT NULL,
+        identifier_type TEXT NOT NULL,
+        action TEXT NOT NULL,
+        count INTEGER DEFAULT 1,
+        window_start DATETIME NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(identifier, identifier_type, action)
+      )`,
+      
+      // 使用量追跡テーブル（既存から移行）
+      `CREATE TABLE IF NOT EXISTS usage_tracking (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        date DATE NOT NULL,
+        article_count INTEGER DEFAULT 0,
+        regeneration_count INTEGER DEFAULT 0,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+        UNIQUE(user_id, date)
+      )`,
+      
+      // デモ使用追跡テーブル（既存のまま）
+      `CREATE TABLE IF NOT EXISTS demo_usage (
+        id TEXT PRIMARY KEY,
+        identifier TEXT NOT NULL,
+        identifier_type TEXT NOT NULL,
+        usage_count INTEGER DEFAULT 0,
+        is_banned BOOLEAN DEFAULT FALSE,
+        last_used DATETIME,
+        device_info TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(identifier, identifier_type)
+      )`,
+      
+      // ブラックリスト（既存のまま）
+      `CREATE TABLE IF NOT EXISTS demo_blacklist (
+        id TEXT PRIMARY KEY,
+        identifier TEXT NOT NULL,
+        identifier_type TEXT NOT NULL,
+        reason TEXT,
+        banned_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        device_info TEXT,
+        UNIQUE(identifier, identifier_type)
+      )`
+    ];
 
-      // クールダウンチェック
-      const lastRequest = await this.db.getLastCodeRequest(email);
-      if (lastRequest) {
-        const timeSinceLastRequest = Date.now() - new Date(lastRequest.created_at).getTime();
-        if (timeSinceLastRequest < this.codeRequestCooldown) {
-          const waitTime = Math.ceil((this.codeRequestCooldown - timeSinceLastRequest) / 1000);
-          throw new Error(`認証コードの再送信は${waitTime}秒後に可能です`);
-        }
-      }
-
-      // 6桁ランダムコード生成
-      const code = this.generateAuthCode();
-      const expiresAt = new Date(Date.now() + this.codeExpiry).toISOString();
-      
-      // データベースに保存
-      const codeId = await this.db.saveAuthCode(email, code, expiresAt, ipAddress, userAgent);
-      
-      // メール送信
-      await this.sendAuthCodeEmail(email, code);
-      
-      // セキュリティログ
-      const user = await this.db.getUserByEmail(email);
-      await this.db.logSecurityEvent(
-        user?.id || null, 
-        'auth_code_requested', 
-        ipAddress, 
-        userAgent, 
-        `Code requested for ${email}`,
-        'low'
-      );
-
-      console.log(`[auth] Auth code sent to: ${email}`);
-      
-      const nextAllowedAt = new Date(Date.now() + this.codeRequestCooldown);
-      
-      return {
-        success: true,
-        message: '認証コードを送信しました',
-        codeId,
-        expiresAt,
-        nextRequestAllowedAt: nextAllowedAt.toISOString()
-      };
-
-    } catch (error) {
-      console.error('[auth] Auth code request error:', error);
-      
-      // セキュリティログ（失敗）
-      await this.db.logSecurityEvent(
-        null, 
-        'auth_code_request_failed', 
-        ipAddress, 
-        userAgent, 
-        `Failed: ${error.message}`,
-        'medium'
-      );
-      
-      throw error;
+    for (const sql of tables) {
+      await this.run(sql);
     }
-  }
-
-  // ========================================
-  // 認証コード検証とJWT発行
-  // ========================================
-
-  async verifyCodeAndLogin(email, code, ipAddress = null, userAgent = null) {
-    try {
-      email = email.toLowerCase().trim();
-      
-      console.log(`[auth] Verifying code for: ${email}`);
-
-      // 入力検証
-      if (!email || !code) {
-        throw new Error('メールアドレスと認証コードを入力してください');
-      }
-
-      if (!this.isValidEmail(email)) {
-        throw new Error('有効なメールアドレスを入力してください');
-      }
-
-      if (!/^\d{6}$/.test(code)) {
-        throw new Error('認証コードは6桁の数字で入力してください');
-      }
-
-      // ユーザーロック状態をチェック
-      if (await this.db.isUserLocked(email)) {
-        throw new Error('アカウントが一時的にロックされています');
-      }
-
-      // レート制限チェック（認証試行）
-      if (ipAddress) {
-        const ipLimit = await this.db.checkRateLimit(
-          ipAddress, 'ip', 'auth_attempt',
-          this.rateLimit.authAttempt.window,
-          this.rateLimit.authAttempt.max
-        );
-        
-        if (!ipLimit.allowed) {
-          throw new Error('認証試行回数が多すぎます。しばらく待ってから再試行してください');
-        }
-      }
-
-      // 認証コード検証
-      const verification = await this.db.verifyAuthCode(email, code);
-      
-      if (!verification.valid) {
-        // 失敗の場合、ログイン試行回数を増加
-        await this.db.incrementLoginAttempts(email);
-        
-        // セキュリティログ
-        const user = await this.db.getUserByEmail(email);
-        await this.db.logSecurityEvent(
-          user?.id || null,
-          'auth_failed',
-          ipAddress,
-          userAgent,
-          `Invalid code: ${verification.reason}`,
-          'high'
-        );
-        
-        let errorMessage = '認証に失敗しました';
-        if (verification.reason === 'Code not found or expired') {
-          errorMessage = '認証コードが無効または期限切れです';
-        } else if (verification.reason === 'Too many attempts') {
-          errorMessage = '認証コードの試行回数が多すぎます';
-        } else if (verification.reason === 'Invalid code') {
-          errorMessage = '認証コードが正しくありません';
-        }
-        
-        throw new Error(errorMessage);
-      }
-
-      // ユーザーを取得または作成
-      let user = await this.db.getUserByEmail(email);
-      if (!user) {
-        // 新規ユーザー作成
-        const userId = await this.db.createUser(email);
-        user = await this.db.getUserById(userId);
-        console.log(`[auth] Created new user: ${userId}`);
-      }
-
-      // ログイン成功処理
-      await this.db.updateLastLogin(user.id, ipAddress);
-      
-      // JWT生成
-      const tokens = this.generateTokens(user);
-      
-      // セキュリティログ
-      await this.db.logSecurityEvent(
-        user.id,
-        'login_success',
-        ipAddress,
-        userAgent,
-        'Email authentication successful',
-        'low'
-      );
-
-      console.log(`[auth] Login successful for user: ${user.id}`);
-
-      return {
-        success: true,
-        verified: true,
-        user: {
-          id: user.id,
-          email: user.email,
-          displayName: user.display_name,
-          role: user.role || 'user'
-        },
-        accessToken: tokens.accessToken,
-        refreshToken: tokens.refreshToken,
-        expiresIn: 24 * 60 * 60, // 24時間（秒）
-        message: 'ログインに成功しました'
-      };
-
-    } catch (error) {
-      console.error('[auth] Login verification error:', error);
-      throw error;
-    }
-  }
-
-  // ========================================
-  // JWT関連
-  // ========================================
-
-  generateTokens(user) {
-    const jti = uuidv4(); // JWT ID
-    const now = Math.floor(Date.now() / 1000);
     
-    const payload = {
-      jti,
-      sub: user.id,
-      email: user.email,
-      role: user.role || 'user',
-      iat: now,
-      iss: 'illustauto',
-      aud: 'illustauto-users'
-    };
+    console.log('[db] All tables created successfully');
+  }
 
-    const accessToken = jwt.sign(payload, this.jwtSecret, {
-      expiresIn: this.jwtExpiry
+  // Promiseベースのクエリ実行
+  run(sql, params = []) {
+    return new Promise((resolve, reject) => {
+      this.db.run(sql, params, function(err) {
+        if (err) {
+          console.error('[db] Run error:', err);
+          reject(err);
+        } else {
+          resolve({ lastID: this.lastID, changes: this.changes });
+        }
+      });
     });
+  }
 
-    const refreshPayload = {
-      jti: uuidv4(),
-      sub: user.id,
-      type: 'refresh',
-      iat: now
-    };
-
-    const refreshToken = jwt.sign(refreshPayload, this.jwtRefreshSecret, {
-      expiresIn: this.refreshExpiry
+  get(sql, params = []) {
+    return new Promise((resolve, reject) => {
+      this.db.get(sql, params, (err, row) => {
+        if (err) {
+          console.error('[db] Get error:', err);
+          reject(err);
+        } else {
+          resolve(row);
+        }
+      });
     });
-
-    return { accessToken, refreshToken };
   }
 
-  async verifyToken(token) {
-    try {
-      const decoded = jwt.verify(token, this.jwtSecret);
-      
-      // ブラックリストチェック
-      if (await this.db.isTokenBlacklisted(decoded.jti)) {
-        throw new Error('Token has been revoked');
-      }
-      
-      // ユーザー存在チェック
-      const user = await this.db.getUserById(decoded.sub);
-      if (!user) {
-        throw new Error('User not found');
-      }
-      
-      return {
-        valid: true,
-        user: {
-          id: user.id,
-          email: user.email,
-          displayName: user.display_name,
-          role: user.role || 'user'
-        },
-        decoded
-      };
-    } catch (error) {
-      console.error('[auth] Token verification error:', error);
-      return {
-        valid: false,
-        error: error.message
-      };
-    }
-  }
-
-  async refreshToken(refreshToken) {
-    try {
-      const decoded = jwt.verify(refreshToken, this.jwtRefreshSecret);
-      
-      if (decoded.type !== 'refresh') {
-        throw new Error('Invalid refresh token');
-      }
-      
-      const user = await this.db.getUserById(decoded.sub);
-      if (!user) {
-        throw new Error('User not found');
-      }
-      
-      const tokens = this.generateTokens(user);
-      
-      return {
-        success: true,
-        accessToken: tokens.accessToken,
-        expiresIn: 24 * 60 * 60
-      };
-      
-    } catch (error) {
-      console.error('[auth] Token refresh error:', error);
-      throw new Error('Invalid refresh token');
-    }
-  }
-
-  async logout(token) {
-    try {
-      const decoded = jwt.verify(token, this.jwtSecret, { ignoreExpiration: true });
-      
-      // トークンをブラックリストに追加
-      const expiresAt = new Date(decoded.exp * 1000).toISOString();
-      await this.db.addToBlacklist(decoded.jti, decoded.sub, expiresAt);
-      
-      // セキュリティログ
-      await this.db.logSecurityEvent(
-        decoded.sub,
-        'logout',
-        null,
-        null,
-        'User logged out',
-        'low'
-      );
-      
-      console.log(`[auth] User logged out: ${decoded.sub}`);
-      
-      return { success: true };
-    } catch (error) {
-      console.error('[auth] Logout error:', error);
-      return { success: false, message: error.message };
-    }
+  all(sql, params = []) {
+    return new Promise((resolve, reject) => {
+      this.db.all(sql, params, (err, rows) => {
+        if (err) {
+          console.error('[db] All error:', err);
+          reject(err);
+        } else {
+          resolve(rows);
+        }
+      });
+    });
   }
 
   // ========================================
   // ユーティリティメソッド
   // ========================================
 
-  generateAuthCode() {
-    return Math.floor(100000 + Math.random() * 900000).toString();
+  // メールアドレスのハッシュ化
+  hashEmail(email) {
+    return crypto.createHash('sha256').update(email.toLowerCase().trim()).digest('hex');
   }
 
-  isValidEmail(email) {
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    return emailRegex.test(email);
+  // 認証コードのハッシュ化
+  async hashCode(code) {
+    return await bcrypt.hash(code, 10);
   }
 
-  async sendAuthCodeEmail(email, code) {
-    try {
-      if (this.emailMode === 'smtp') {
-        // 実際のメール送信
-        const fromEmail = process.env.SMTP_FROM || process.env.SMTP_USER;
-        
-        const mailOptions = {
-          from: `"IllustAuto" <${fromEmail}>`,
-          to: email,
-          subject: 'IllustAuto 認証コード',
-          html: `
-            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-              <div style="text-align: center; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; border-radius: 10px;">
-                <h1 style="margin: 0; font-size: 28px;">🎨 IllustAuto</h1>
-                <p style="margin: 10px 0 0 0; font-size: 16px;">AI画像生成サービス</p>
-              </div>
-              
-              <div style="background: #f8f9fa; padding: 30px; border-radius: 10px; margin: 20px 0; text-align: center;">
-                <h2 style="color: #333; margin: 0 0 20px 0;">認証コード</h2>
-                <div style="background: white; border: 2px dashed #667eea; border-radius: 8px; padding: 20px; margin: 20px 0;">
-                  <span style="font-size: 32px; font-weight: bold; color: #667eea; letter-spacing: 4px; font-family: 'Courier New', monospace;">${code}</span>
-                </div>
-                <p style="color: #666; margin: 20px 0 0 0;">
-                  ⏰ このコードは <strong>5分間</strong> 有効です<br>
-                  コードを入力してログインを完了してください
-                </p>
-              </div>
-              
-              <div style="background: #fff3cd; border: 1px solid #ffeaa7; border-radius: 8px; padding: 20px; margin: 20px 0;">
-                <p style="margin: 0; color: #856404; font-size: 14px;">
-                  <strong>🔒 セキュリティについて</strong><br>
-                  このメールに心当たりがない場合は、このメールを削除してください。<br>
-                  認証コードは他の人と共有しないでください。
-                </p>
-              </div>
-              
-              <div style="text-align: center; padding: 20px; color: #666; font-size: 12px;">
-                <p>© 2024 IllustAuto. All rights reserved.</p>
-              </div>
-            </div>
-          `,
-          text: `
-IllustAuto 認証コード
+  // 認証コードの検証
+  async verifyCode(code, hashedCode) {
+    return await bcrypt.compare(code, hashedCode);
+  }
 
-認証コード: ${code}
+  // ========================================
+  // ユーザー管理メソッド
+  // ========================================
 
-このコードは5分間有効です。
-ログインページでこのコードを入力してください。
+  async createUser(email, displayName = null) {
+    const userId = uuidv4();
+    const emailHash = this.hashEmail(email);
+    
+    await this.run(
+      'INSERT INTO users (id, email, email_hash, display_name, email_verified) VALUES (?, ?, ?, ?, ?)',
+      [userId, email, emailHash, displayName, true] // メール認証後なのでtrue
+    );
+    
+    // セキュリティログを記録
+    await this.logSecurityEvent(userId, 'user_created', null, null, `User created: ${email}`, 'low');
+    
+    return userId;
+  }
 
-このメールに心当たりがない場合は、削除してください。
+  async getUserByEmail(email) {
+    const emailHash = this.hashEmail(email);
+    return await this.get('SELECT * FROM users WHERE email_hash = ?', [emailHash]);
+  }
 
-© 2024 IllustAuto
-          `
-        };
+  async getUserById(userId) {
+    return await this.get('SELECT * FROM users WHERE id = ?', [userId]);
+  }
 
-        const result = await this.mailer.sendMail(mailOptions);
-        console.log(`[auth] 📧 認証コードをメール送信しました: ${email} (MessageID: ${result.messageId})`);
-        
-      } else {
-        // コンソール出力モード（開発環境）
-        console.log('');
-        console.log('🔐=================================');
-        console.log('📧 IllustAuto 認証コード');
-        console.log('=================================');
-        console.log(`👤 ユーザー: ${email}`);
-        console.log(`🔑 認証コード: ${code}`);
-        console.log('⏰ 有効期限: 5分間');
-        console.log('=================================🔐');
-        console.log('');
-        
-        console.log(`[auth] 📧 認証コードをコンソールに出力しました: ${email}`);
-      }
-    } catch (error) {
-      console.error('[auth] Email send error:', error);
-      // メール送信失敗の場合はコンソール出力にフォールバック
-      console.log('');
-      console.log('🚨 メール送信に失敗しました。コンソール出力にフォールバック:');
-      console.log(`👤 ユーザー: ${email}`);
-      console.log(`🔑 認証コード: ${code}`);
-      console.log('');
-      
-      // エラーを上位に伝播させない（認証コード生成自体は成功しているため）
+  async updateLastLogin(userId, ipAddress = null) {
+    await this.run(
+      'UPDATE users SET last_login = CURRENT_TIMESTAMP, last_ip = ?, login_attempts = 0 WHERE id = ?',
+      [ipAddress, userId]
+    );
+  }
+
+  async incrementLoginAttempts(email) {
+    const emailHash = this.hashEmail(email);
+    const result = await this.run(
+      'UPDATE users SET login_attempts = login_attempts + 1 WHERE email_hash = ?',
+      [emailHash]
+    );
+    
+    // 5回失敗したらロック（15分間）
+    const user = await this.getUserByEmail(email);
+    if (user && user.login_attempts >= 4) { // 次で5回目
+      const lockUntil = new Date(Date.now() + 15 * 60 * 1000); // 15分後
+      await this.run(
+        'UPDATE users SET locked_until = ? WHERE email_hash = ?',
+        [lockUntil.toISOString(), emailHash]
+      );
+    }
+    
+    return result;
+  }
+
+  async isUserLocked(email) {
+    const user = await this.getUserByEmail(email);
+    if (!user || !user.locked_until) return false;
+    
+    const now = new Date();
+    const lockUntil = new Date(user.locked_until);
+    
+    if (now < lockUntil) {
+      return true;
+    } else {
+      // ロック期間が過ぎた場合、ロックを解除
+      await this.run('UPDATE users SET locked_until = NULL, login_attempts = 0 WHERE id = ?', [user.id]);
+      return false;
     }
   }
 
   // ========================================
-  // クリーンアップ
+  // 認証コード管理
   // ========================================
 
-  async cleanup() {
-    try {
-      await this.db.cleanupExpiredTokens();
-      await this.db.cleanupOldRateLimits();
-      console.log('[auth] Cleanup completed');
-    } catch (error) {
-      console.error('[auth] Cleanup error:', error);
+  async saveAuthCode(email, code, expiresAt, ipAddress = null, userAgent = null) {
+    const codeId = uuidv4();
+    const emailHash = this.hashEmail(email);
+    const codeHash = await this.hashCode(code);
+    
+    // 既存の未使用コードを削除
+    await this.run('DELETE FROM auth_codes WHERE email_hash = ? AND used = FALSE', [emailHash]);
+    
+    await this.run(
+      'INSERT INTO auth_codes (id, email_hash, code_hash, expires_at, ip_address, user_agent) VALUES (?, ?, ?, ?, ?, ?)',
+      [codeId, emailHash, codeHash, expiresAt, ipAddress, userAgent]
+    );
+    
+    return codeId;
+  }
+
+  async verifyAuthCode(email, code) {
+    const emailHash = this.hashEmail(email);
+    
+    const authCode = await this.get(
+      'SELECT * FROM auth_codes WHERE email_hash = ? AND used = FALSE AND expires_at > CURRENT_TIMESTAMP ORDER BY created_at DESC LIMIT 1',
+      [emailHash]
+    );
+    
+    if (!authCode) {
+      return { valid: false, reason: 'Code not found or expired' };
+    }
+    
+    // 試行回数をチェック
+    if (authCode.attempts >= 3) {
+      return { valid: false, reason: 'Too many attempts' };
+    }
+    
+    // 試行回数を増加
+    await this.run('UPDATE auth_codes SET attempts = attempts + 1 WHERE id = ?', [authCode.id]);
+    
+    // コードを検証
+    const isValid = await this.verifyCode(code, authCode.code_hash);
+    
+    if (isValid) {
+      // 使用済みにマーク
+      await this.run('UPDATE auth_codes SET used = TRUE WHERE id = ?', [authCode.id]);
+      return { valid: true, codeId: authCode.id };
+    } else {
+      return { valid: false, reason: 'Invalid code' };
+    }
+  }
+
+  async getLastCodeRequest(email) {
+    const emailHash = this.hashEmail(email);
+    return await this.get(
+      'SELECT * FROM auth_codes WHERE email_hash = ? ORDER BY created_at DESC LIMIT 1',
+      [emailHash]
+    );
+  }
+
+  // ========================================
+  // JWT ブラックリスト管理
+  // ========================================
+
+  async addToBlacklist(tokenJti, userId, expiresAt) {
+    const id = uuidv4();
+    await this.run(
+      'INSERT INTO jwt_blacklist (id, token_jti, user_id, expires_at) VALUES (?, ?, ?, ?)',
+      [id, tokenJti, userId, expiresAt]
+    );
+  }
+
+  async isTokenBlacklisted(tokenJti) {
+    const result = await this.get(
+      'SELECT * FROM jwt_blacklist WHERE token_jti = ? AND expires_at > CURRENT_TIMESTAMP',
+      [tokenJti]
+    );
+    return !!result;
+  }
+
+  async cleanupExpiredTokens() {
+    const result = await this.run('DELETE FROM jwt_blacklist WHERE expires_at <= CURRENT_TIMESTAMP');
+    if (result.changes > 0) {
+      console.log(`[db] Cleaned up ${result.changes} expired tokens`);
+    }
+  }
+
+  // ========================================
+  // レート制限管理
+  // ========================================
+
+  async checkRateLimit(identifier, identifierType, action, windowMs, maxAttempts) {
+    const windowStart = new Date(Date.now() - windowMs);
+    
+    const existing = await this.get(
+      'SELECT * FROM rate_limits WHERE identifier = ? AND identifier_type = ? AND action = ? AND window_start > ?',
+      [identifier, identifierType, action, windowStart.toISOString()]
+    );
+    
+    if (existing) {
+      if (existing.count >= maxAttempts) {
+        return { allowed: false, count: existing.count, resetAt: new Date(new Date(existing.window_start).getTime() + windowMs) };
+      } else {
+        // カウントを増加
+        await this.run('UPDATE rate_limits SET count = count + 1 WHERE id = ?', [existing.id]);
+        return { allowed: true, count: existing.count + 1 };
+      }
+    } else {
+      // 新しいウィンドウを作成
+      const id = uuidv4();
+      await this.run(
+        'INSERT INTO rate_limits (id, identifier, identifier_type, action, window_start) VALUES (?, ?, ?, ?, ?)',
+        [id, identifier, identifierType, action, new Date().toISOString()]
+      );
+      return { allowed: true, count: 1 };
+    }
+  }
+
+  async cleanupOldRateLimits() {
+    const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const result = await this.run('DELETE FROM rate_limits WHERE window_start < ?', [oneDayAgo.toISOString()]);
+    if (result.changes > 0) {
+      console.log(`[db] Cleaned up ${result.changes} old rate limit records`);
+    }
+  }
+
+  // ========================================
+  // セキュリティログ
+  // ========================================
+
+  async logSecurityEvent(userId, action, ipAddress = null, userAgent = null, details = null, riskLevel = 'low') {
+    const logId = uuidv4();
+    await this.run(
+      'INSERT INTO security_logs (id, user_id, action, ip_address, user_agent, details, risk_level) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [logId, userId, action, ipAddress, userAgent, details, riskLevel]
+    );
+  }
+
+  async getSecurityLogs(userId, limit = 50) {
+    return await this.all(
+      'SELECT * FROM security_logs WHERE user_id = ? ORDER BY created_at DESC LIMIT ?',
+      [userId, limit]
+    );
+  }
+
+  // ========================================
+  // 既存機能（デモ・使用量）の移行
+  // ========================================
+
+  // デモ使用管理（既存のまま）
+  async getDemoUsage(identifier, identifierType = 'ip') {
+    return await this.get(
+      'SELECT * FROM demo_usage WHERE identifier = ? AND identifier_type = ?',
+      [identifier, identifierType]
+    );
+  }
+
+  async incrementDemoUsage(identifiers, deviceInfo = null) {
+    const DEMO_LIMIT = 3;
+    const results = [];
+    
+    for (const { identifier, type } of identifiers) {
+      const existing = await this.getDemoUsage(identifier, type);
+      let newCount;
+      
+      if (existing) {
+        newCount = existing.usage_count + 1;
+        const isBanned = newCount >= DEMO_LIMIT;
+        
+        await this.run(`
+          UPDATE demo_usage 
+          SET usage_count = ?,
+              is_banned = ?,
+              last_used = CURRENT_TIMESTAMP,
+              device_info = ?
+          WHERE identifier = ? AND identifier_type = ?
+        `, [newCount, isBanned, deviceInfo, identifier, type]);
+        
+        if (isBanned) {
+          await this.addToBlacklist(identifier, type, `Demo limit exceeded (${newCount}/${DEMO_LIMIT})`, deviceInfo);
+        }
+      } else {
+        newCount = 1;
+        const id = uuidv4();
+        await this.run(`
+          INSERT INTO demo_usage 
+          (id, identifier, identifier_type, usage_count, last_used, device_info)
+          VALUES (?, ?, ?, 1, CURRENT_TIMESTAMP, ?)
+        `, [id, identifier, type, deviceInfo]);
+      }
+      
+      results.push({ identifier, type, count: newCount });
+    }
+    
+    return results;
+  }
+
+  async addToBlacklist(identifier, identifierType, reason, deviceInfo = null) {
+    const id = uuidv4();
+    await this.run(`
+      INSERT OR IGNORE INTO demo_blacklist 
+      (id, identifier, identifier_type, reason, device_info)
+      VALUES (?, ?, ?, ?, ?)
+    `, [id, identifier, identifierType, reason, deviceInfo]);
+  }
+
+  // 使用量追跡
+  async getTodayUsage(userId) {
+    const today = new Date().toISOString().split('T')[0];
+    return await this.get(
+      'SELECT * FROM usage_tracking WHERE user_id = ? AND date = ?',
+      [userId, today]
+    );
+  }
+
+  async incrementUsage(userId, type) {
+    const today = new Date().toISOString().split('T')[0];
+    const column = type === 'article' ? 'article_count' : 'regeneration_count';
+    
+    await this.run(`
+      INSERT INTO usage_tracking (id, user_id, date, ${column})
+      VALUES (?, ?, ?, 1)
+      ON CONFLICT(user_id, date)
+      DO UPDATE SET 
+        ${column} = ${column} + 1,
+        updated_at = CURRENT_TIMESTAMP
+    `, [uuidv4(), userId, today]);
+  }
+
+  // 決済管理
+  async updatePaymentStatus(userId, paymentData) {
+    const { status, plan, amount, expirationDate, note } = paymentData;
+    await this.run(`
+      UPDATE users 
+      SET payment_status = ?, 
+          payment_date = CURRENT_TIMESTAMP,
+          payment_plan = ?,
+          payment_amount = ?,
+          expiration_date = ?,
+          payment_note = ?
+      WHERE id = ?
+    `, [status, plan, amount, expirationDate, note, userId]);
+  }
+
+  async checkPaymentStatus(email) {
+    const user = await this.getUserByEmail(email);
+    if (!user) return null;
+    
+    if (user.payment_status === 'paid' && user.expiration_date) {
+      const now = new Date();
+      const expiry = new Date(user.expiration_date);
+      if (expiry < now) {
+        await this.run('UPDATE users SET payment_status = ? WHERE id = ?', ['expired', user.id]);
+        return 'expired';
+      }
+    }
+    
+    return user.payment_status;
+  }
+
+  async getUserRole(userId) {
+    const user = await this.get('SELECT role FROM users WHERE id = ?', [userId]);
+    return user?.role || 'user';
+  }
+
+  // ========================================
+  // デモ使用管理メソッド
+  // ========================================
+  
+  async getDemoUsage(identifier, identifierType = 'ip') {
+    return await this.get(`
+      SELECT * FROM demo_usage 
+      WHERE identifier = ? AND identifier_type = ?
+    `, [identifier, identifierType]);
+  }
+
+  async isBlacklisted(identifier, identifierType = 'ip') {
+    const blacklisted = await this.get(`
+      SELECT * FROM demo_blacklist 
+      WHERE identifier = ? AND identifier_type = ?
+    `, [identifier, identifierType]);
+    return !!blacklisted;
+  }
+
+  async addToBlacklist(identifier, identifierType, reason, deviceInfo = null) {
+    const id = uuidv4();
+    await this.run(`
+      INSERT OR IGNORE INTO demo_blacklist 
+      (id, identifier, identifier_type, reason, device_info)
+      VALUES (?, ?, ?, ?, ?)
+    `, [id, identifier, identifierType, reason, deviceInfo]);
+  }
+
+  async checkDemoAccess(identifiers) {
+    // 複数の識別子をチェック
+    for (const { identifier, type } of identifiers) {
+      // ブラックリストチェック
+      if (await this.isBlacklisted(identifier, type)) {
+        return { allowed: false, reason: 'BLACKLISTED', identifier, type };
+      }
+      
+      // 使用回数チェック
+      const usage = await this.getDemoUsage(identifier, type);
+      if (usage && (usage.usage_count >= 3 || usage.is_banned)) {
+        return { allowed: false, reason: 'LIMIT_EXCEEDED', identifier, type, usage };
+      }
+    }
+    
+    return { allowed: true };
+  }
+
+  async incrementDemoUsage(identifiers, deviceInfo = null) {
+    const DEMO_LIMIT = 3;
+    const results = [];
+    
+    // 各識別子の使用回数を更新
+    for (const { identifier, type } of identifiers) {
+      const existing = await this.getDemoUsage(identifier, type);
+      let newCount;
+      
+      if (existing) {
+        newCount = existing.usage_count + 1;
+        
+        // 制限に達した場合はban状態にする
+        const isBanned = newCount >= DEMO_LIMIT;
+        
+        await this.run(`
+          UPDATE demo_usage 
+          SET usage_count = ?,
+              is_banned = ?,
+              last_used = CURRENT_TIMESTAMP,
+              device_info = ?
+          WHERE identifier = ? AND identifier_type = ?
+        `, [newCount, isBanned, deviceInfo, identifier, type]);
+        
+        // ブラックリストに追加
+        if (isBanned) {
+          await this.addToBlacklist(
+            identifier, 
+            type, 
+            `Demo limit exceeded (${newCount}/${DEMO_LIMIT})`,
+            deviceInfo
+          );
+        }
+      } else {
+        newCount = 1;
+        const id = uuidv4();
+        await this.run(`
+          INSERT INTO demo_usage 
+          (id, identifier, identifier_type, usage_count, last_used, device_info)
+          VALUES (?, ?, ?, 1, CURRENT_TIMESTAMP, ?)
+        `, [id, identifier, type, deviceInfo]);
+      }
+      
+      results.push({ identifier, type, count: newCount });
+    }
+    
+    return results;
+  }
+
+  async close() {
+    if (this.db) {
+      return new Promise((resolve) => {
+        this.db.close((err) => {
+          if (err) {
+            console.error('[db] Error closing database:', err);
+          } else {
+            console.log('[db] Database connection closed');
+          }
+          resolve();
+        });
+      });
     }
   }
 }
 
-export default EmailAuthenticator;
+export default SecureDatabase;
