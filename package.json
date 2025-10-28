@@ -1,7 +1,7 @@
 {
   "name": "illustauto-backend",
-  "version": "1.0.0",
-  "description": "AI-powered illustration generation service with Passkey authentication",
+  "version": "2.0.0",
+  "description": "AI-powered illustration generation service with secure email authentication",
   "main": "server.js",
   "type": "module",
   "scripts": {
@@ -12,11 +12,12 @@
   "dependencies": {
     "express": "^4.18.2",
     "cors": "^2.8.5",
-    "@simplewebauthn/server": "^9.0.3",
+    "jsonwebtoken": "^9.0.2",
+    "nodemailer": "^6.9.7",
+    "bcryptjs": "^2.4.3",
+    "crypto": "^1.0.1",
     "uuid": "^9.0.1",
     "express-rate-limit": "^7.1.5",
-    "express-session": "^1.17.3",
-    "connect-sqlite3": "^0.9.13",
     "sqlite3": "^5.1.6"
   },
   "devDependencies": {
@@ -25,8 +26,8 @@
   "keywords": [
     "ai",
     "illustration",
-    "webauthn",
-    "passkey",
+    "email-auth",
+    "jwt",
     "gemini",
     "authentication"
   ],
