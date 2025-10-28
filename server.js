@@ -6,6 +6,7 @@ import { fileURLToPath } from 'url';
 import SecureDatabase from './database.js';
 import EmailAuthenticator from './auth.js';
 import ConfigManager from './config.js';
+import ImageGenerator from './imageGenerator.js';
 
 // ES Modules用のdirname設定
 const __filename = fileURLToPath(import.meta.url);
@@ -23,9 +24,10 @@ if (!validation.valid) {
   process.exit(1);
 }
 
-// データベースとAuth初期化
+// データベース、Auth、画像生成初期化
 const db = new SecureDatabase();
 const auth = new EmailAuthenticator(db);
+const imageGen = new ImageGenerator();
 
 // ========================================
 // ミドルウェア設定
@@ -418,17 +420,25 @@ app.post('/api/demo/generate', async (req, res) => {
     const usageResults = await db.incrementDemoUsage(identifiers);
     const remainingUses = Math.max(0, 3 - usageResults[0].count);
 
-    // 画像生成処理をここに実装
-    // TODO: Gemini API連携
+    // 画像生成処理
+    console.log('[api] Generating demo image with AI...');
+    const result = await imageGen.generateImages(prompt, {
+      taste: 'modern',
+      aspectRatio: aspectRatio,
+      maxImages: 1
+    });
 
-    // 仮の応答
+    const image = result.images[0];
+    
     res.json({
       success: true,
-      dataUrl: 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDAwIiBoZWlnaHQ9IjQwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KICA8cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSIjZGRkZGRkIi8+CiAgPHRleHQgeD0iNTAlIiB5PSI1MCUiIGZvbnQtZmFtaWx5PSJBcmlhbCwgc2Fucy1zZXJpZiIgZm9udC1zaXplPSIxOCIgZmlsbD0iIzk5OTk5OSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZHk9Ii4zZW0iPkRlbW8gSW1hZ2U8L3RleHQ+Cjwvc3ZnPgo=',
+      dataUrl: image.dataUrl,
       demoInfo: {
         message: `デモ画像を生成しました（残り${remainingUses}回）`,
         remainingUses,
-        usedCount: usageResults[0].count
+        usedCount: usageResults[0].count,
+        prompt: image.prompt,
+        provider: image.provider
       }
     });
   } catch (error) {
@@ -458,22 +468,33 @@ app.post('/api/generate', requireAuth, checkUsageLimits, async (req, res) => {
     // 使用量を増加
     await db.incrementUsage(req.user.id, 'article');
 
-    // TODO: 実際の画像生成処理をここに実装
+    // AI画像生成処理
+    console.log(`[api] Generating images for user ${req.user.id} with ${provider} provider...`);
+    const result = await imageGen.generateImages(content, {
+      taste: taste,
+      aspectRatio: aspectRatio,
+      maxImages: 3
+    });
+
+    if (!result.success) {
+      return res.status(500).json({
+        error: 'GENERATION_FAILED',
+        message: result.message || '画像生成に失敗しました',
+        details: result.error
+      });
+    }
     
-    // 仮の応答
     res.json({
       success: true,
-      message: '画像生成が完了しました',
-      images: [
-        {
-          id: 'demo-1',
-          title: 'Generated Image 1',
-          dataUrl: 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDAwIiBoZWlnaHQ9IjQwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KICA8cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSIjNjY3ZWVhIi8+CiAgPHRleHQgeD0iNTAlIiB5PSI1MCUiIGZvbnQtZmFtaWx5PSJBcmlhbCwgc2Fucy1zZXJpZiIgZm9udC1zaXplPSIxOCIgZmlsbD0iI2ZmZmZmZiIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZHk9Ii4zZW0iPkdlbmVyYXRlZCBJbWFnZTwvdGV4dD4KPC9zdmc+Cg=='
-        }
-      ],
+      message: result.message,
+      images: result.images,
       usage: {
         articleCount: req.usage.articleCount + 1,
         regenerationCount: req.usage.regenerationCount
+      },
+      generationInfo: {
+        provider: result.provider,
+        chunksProcessed: result.images.length
       }
     });
   } catch (error) {
