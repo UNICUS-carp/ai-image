@@ -1,15 +1,16 @@
 import sqlite3 from 'sqlite3';
 import { v4 as uuidv4 } from 'uuid';
+import bcrypt from 'bcryptjs';
+import crypto from 'crypto';
 
-class Database {
+class SecureDatabase {
   constructor() {
     this.db = null;
   }
 
   async initialize() {
     return new Promise((resolve, reject) => {
-      // 永続化データベース（Railway対応）
-      const dbPath = process.env.DATABASE_PATH || './illustauto.db';
+      const dbPath = process.env.DATABASE_PATH || './illustauto_v2.db';
       this.db = new sqlite3.Database(dbPath, (err) => {
         if (err) {
           console.error('[db] Failed to initialize database:', err);
@@ -24,10 +25,11 @@ class Database {
 
   async createTables() {
     const tables = [
-      // ユーザーテーブル
+      // ユーザーテーブル（シンプル化・セキュア化）
       `CREATE TABLE IF NOT EXISTS users (
         id TEXT PRIMARY KEY,
-        email TEXT UNIQUE,
+        email TEXT UNIQUE NOT NULL,
+        email_hash TEXT UNIQUE NOT NULL,
         display_name TEXT,
         role TEXT DEFAULT 'user',
         payment_status TEXT DEFAULT 'pending',
@@ -36,40 +38,63 @@ class Database {
         payment_plan TEXT,
         payment_amount INTEGER,
         payment_note TEXT,
+        login_attempts INTEGER DEFAULT 0,
+        locked_until DATETIME NULL,
+        email_verified BOOLEAN DEFAULT FALSE,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        last_login DATETIME
+        last_login DATETIME,
+        last_ip TEXT
       )`,
       
-      // WebAuthn認証情報テーブル（修正版）
-      `CREATE TABLE IF NOT EXISTS user_credentials (
+      // 認証コードテーブル
+      `CREATE TABLE IF NOT EXISTS auth_codes (
         id TEXT PRIMARY KEY,
-        user_id TEXT NOT NULL,
-        credential_id TEXT UNIQUE NOT NULL,
-        credential_public_key TEXT NOT NULL,  -- BLOBからTEXTに変更
-        counter INTEGER NOT NULL DEFAULT 0,
-        credential_device_type TEXT,
-        credential_backed_up BOOLEAN DEFAULT FALSE,
-        transports TEXT,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        last_used DATETIME,  -- 最後に使用された時刻を追加
-        FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+        email_hash TEXT NOT NULL,
+        code_hash TEXT NOT NULL,
+        expires_at DATETIME NOT NULL,
+        used BOOLEAN DEFAULT FALSE,
+        attempts INTEGER DEFAULT 0,
+        ip_address TEXT,
+        user_agent TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
       )`,
       
-      // セッションテーブル（セキュリティ強化版）
-      `CREATE TABLE IF NOT EXISTS user_sessions (
+      // JWTブラックリストテーブル
+      `CREATE TABLE IF NOT EXISTS jwt_blacklist (
         id TEXT PRIMARY KEY,
+        token_jti TEXT UNIQUE NOT NULL,
         user_id TEXT NOT NULL,
-        session_data TEXT,
         expires_at DATETIME NOT NULL,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        last_accessed DATETIME DEFAULT CURRENT_TIMESTAMP,  -- 最後のアクセス時刻
-        user_agent TEXT,     -- UserAgent情報
-        ip_address TEXT,     -- IPアドレス
-        is_active BOOLEAN DEFAULT TRUE,  -- セッションの有効性
         FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
       )`,
       
-      // 使用量追跡テーブル
+      // セキュリティログテーブル
+      `CREATE TABLE IF NOT EXISTS security_logs (
+        id TEXT PRIMARY KEY,
+        user_id TEXT,
+        action TEXT NOT NULL,
+        ip_address TEXT,
+        user_agent TEXT,
+        details TEXT,
+        risk_level TEXT DEFAULT 'low',
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE SET NULL
+      )`,
+      
+      // レート制限テーブル
+      `CREATE TABLE IF NOT EXISTS rate_limits (
+        id TEXT PRIMARY KEY,
+        identifier TEXT NOT NULL,
+        identifier_type TEXT NOT NULL,
+        action TEXT NOT NULL,
+        count INTEGER DEFAULT 1,
+        window_start DATETIME NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(identifier, identifier_type, action)
+      )`,
+      
+      // 使用量追跡テーブル（既存から移行）
       `CREATE TABLE IF NOT EXISTS usage_tracking (
         id TEXT PRIMARY KEY,
         user_id TEXT NOT NULL,
@@ -82,7 +107,7 @@ class Database {
         UNIQUE(user_id, date)
       )`,
       
-      // デモ使用追跡テーブル（複数識別子）
+      // デモ使用追跡テーブル（既存のまま）
       `CREATE TABLE IF NOT EXISTS demo_usage (
         id TEXT PRIMARY KEY,
         identifier TEXT NOT NULL,
@@ -95,7 +120,7 @@ class Database {
         UNIQUE(identifier, identifier_type)
       )`,
       
-      // ブラックリスト（使用制限済み識別子）
+      // ブラックリスト（既存のまま）
       `CREATE TABLE IF NOT EXISTS demo_blacklist (
         id TEXT PRIMARY KEY,
         identifier TEXT NOT NULL,
@@ -104,29 +129,6 @@ class Database {
         banned_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         device_info TEXT,
         UNIQUE(identifier, identifier_type)
-      )`,
-      
-      // チャレンジストレージ（一時的な認証チャレンジ）
-      `CREATE TABLE IF NOT EXISTS auth_challenges (
-        challenge TEXT PRIMARY KEY,
-        user_id TEXT,
-        type TEXT NOT NULL,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        expires_at DATETIME NOT NULL,
-        ip_address TEXT,     -- チャレンジ作成時のIPアドレス
-        user_agent TEXT      -- チャレンジ作成時のUserAgent
-      )`,
-      
-      // 認証ログテーブル（セキュリティ監査用）
-      `CREATE TABLE IF NOT EXISTS auth_logs (
-        id TEXT PRIMARY KEY,
-        user_id TEXT,
-        action TEXT NOT NULL,  -- 'register', 'login', 'logout', 'failed_login'
-        ip_address TEXT,
-        user_agent TEXT,
-        details TEXT,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE SET NULL
       )`
     ];
 
@@ -134,32 +136,7 @@ class Database {
       await this.run(sql);
     }
     
-    // 既存テーブルの構造を更新（マイグレーション）
-    await this.migrateExistingTables();
-    
     console.log('[db] All tables created successfully');
-  }
-
-  // 既存テーブルのマイグレーション
-  async migrateExistingTables() {
-    try {
-      // user_credentialsテーブルの列追加
-      await this.run(`ALTER TABLE user_credentials ADD COLUMN last_used DATETIME`).catch(() => {});
-      
-      // user_sessionsテーブルの列追加
-      await this.run(`ALTER TABLE user_sessions ADD COLUMN last_accessed DATETIME DEFAULT CURRENT_TIMESTAMP`).catch(() => {});
-      await this.run(`ALTER TABLE user_sessions ADD COLUMN user_agent TEXT`).catch(() => {});
-      await this.run(`ALTER TABLE user_sessions ADD COLUMN ip_address TEXT`).catch(() => {});
-      await this.run(`ALTER TABLE user_sessions ADD COLUMN is_active BOOLEAN DEFAULT TRUE`).catch(() => {});
-      
-      // auth_challengesテーブルの列追加
-      await this.run(`ALTER TABLE auth_challenges ADD COLUMN ip_address TEXT`).catch(() => {});
-      await this.run(`ALTER TABLE auth_challenges ADD COLUMN user_agent TEXT`).catch(() => {});
-      
-      console.log('[db] Table migrations completed');
-    } catch (error) {
-      console.warn('[db] Migration warning (expected for new installs):', error.message);
-    }
   }
 
   // Promiseベースのクエリ実行
@@ -203,53 +180,325 @@ class Database {
   }
 
   // ========================================
+  // ユーティリティメソッド
+  // ========================================
+
+  // メールアドレスのハッシュ化
+  hashEmail(email) {
+    return crypto.createHash('sha256').update(email.toLowerCase().trim()).digest('hex');
+  }
+
+  // 認証コードのハッシュ化
+  async hashCode(code) {
+    return await bcrypt.hash(code, 10);
+  }
+
+  // 認証コードの検証
+  async verifyCode(code, hashedCode) {
+    return await bcrypt.compare(code, hashedCode);
+  }
+
+  // ========================================
   // ユーザー管理メソッド
   // ========================================
 
   async createUser(email, displayName = null) {
     const userId = uuidv4();
+    const emailHash = this.hashEmail(email);
+    
     await this.run(
-      'INSERT INTO users (id, email, display_name) VALUES (?, ?, ?)',
-      [userId, email, displayName]
+      'INSERT INTO users (id, email, email_hash, display_name, email_verified) VALUES (?, ?, ?, ?, ?)',
+      [userId, email, emailHash, displayName, true] // メール認証後なのでtrue
     );
     
-    // 認証ログを記録
-    await this.logAuthAction(userId, 'register', null, null, `User created: ${email}`);
+    // セキュリティログを記録
+    await this.logSecurityEvent(userId, 'user_created', null, null, `User created: ${email}`, 'low');
     
     return userId;
   }
 
   async getUserByEmail(email) {
-    return await this.get('SELECT * FROM users WHERE email = ?', [email]);
+    const emailHash = this.hashEmail(email);
+    return await this.get('SELECT * FROM users WHERE email_hash = ?', [emailHash]);
   }
 
   async getUserById(userId) {
     return await this.get('SELECT * FROM users WHERE id = ?', [userId]);
   }
 
-  async updateLastLogin(userId) {
+  async updateLastLogin(userId, ipAddress = null) {
     await this.run(
-      'UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = ?',
-      [userId]
+      'UPDATE users SET last_login = CURRENT_TIMESTAMP, last_ip = ?, login_attempts = 0 WHERE id = ?',
+      [ipAddress, userId]
     );
   }
 
-  async setUserRole(userId, role) {
+  async incrementLoginAttempts(email) {
+    const emailHash = this.hashEmail(email);
+    const result = await this.run(
+      'UPDATE users SET login_attempts = login_attempts + 1 WHERE email_hash = ?',
+      [emailHash]
+    );
+    
+    // 5回失敗したらロック（15分間）
+    const user = await this.getUserByEmail(email);
+    if (user && user.login_attempts >= 4) { // 次で5回目
+      const lockUntil = new Date(Date.now() + 15 * 60 * 1000); // 15分後
+      await this.run(
+        'UPDATE users SET locked_until = ? WHERE email_hash = ?',
+        [lockUntil.toISOString(), emailHash]
+      );
+    }
+    
+    return result;
+  }
+
+  async isUserLocked(email) {
+    const user = await this.getUserByEmail(email);
+    if (!user || !user.locked_until) return false;
+    
+    const now = new Date();
+    const lockUntil = new Date(user.locked_until);
+    
+    if (now < lockUntil) {
+      return true;
+    } else {
+      // ロック期間が過ぎた場合、ロックを解除
+      await this.run('UPDATE users SET locked_until = NULL, login_attempts = 0 WHERE id = ?', [user.id]);
+      return false;
+    }
+  }
+
+  // ========================================
+  // 認証コード管理
+  // ========================================
+
+  async saveAuthCode(email, code, expiresAt, ipAddress = null, userAgent = null) {
+    const codeId = uuidv4();
+    const emailHash = this.hashEmail(email);
+    const codeHash = await this.hashCode(code);
+    
+    // 既存の未使用コードを削除
+    await this.run('DELETE FROM auth_codes WHERE email_hash = ? AND used = FALSE', [emailHash]);
+    
     await this.run(
-      'UPDATE users SET role = ? WHERE id = ?',
-      [role, userId]
+      'INSERT INTO auth_codes (id, email_hash, code_hash, expires_at, ip_address, user_agent) VALUES (?, ?, ?, ?, ?, ?)',
+      [codeId, emailHash, codeHash, expiresAt, ipAddress, userAgent]
+    );
+    
+    return codeId;
+  }
+
+  async verifyAuthCode(email, code) {
+    const emailHash = this.hashEmail(email);
+    
+    const authCode = await this.get(
+      'SELECT * FROM auth_codes WHERE email_hash = ? AND used = FALSE AND expires_at > CURRENT_TIMESTAMP ORDER BY created_at DESC LIMIT 1',
+      [emailHash]
+    );
+    
+    if (!authCode) {
+      return { valid: false, reason: 'Code not found or expired' };
+    }
+    
+    // 試行回数をチェック
+    if (authCode.attempts >= 3) {
+      return { valid: false, reason: 'Too many attempts' };
+    }
+    
+    // 試行回数を増加
+    await this.run('UPDATE auth_codes SET attempts = attempts + 1 WHERE id = ?', [authCode.id]);
+    
+    // コードを検証
+    const isValid = await this.verifyCode(code, authCode.code_hash);
+    
+    if (isValid) {
+      // 使用済みにマーク
+      await this.run('UPDATE auth_codes SET used = TRUE WHERE id = ?', [authCode.id]);
+      return { valid: true, codeId: authCode.id };
+    } else {
+      return { valid: false, reason: 'Invalid code' };
+    }
+  }
+
+  async getLastCodeRequest(email) {
+    const emailHash = this.hashEmail(email);
+    return await this.get(
+      'SELECT * FROM auth_codes WHERE email_hash = ? ORDER BY created_at DESC LIMIT 1',
+      [emailHash]
     );
   }
 
-  async getUserRole(userId) {
-    const user = await this.get('SELECT role FROM users WHERE id = ?', [userId]);
-    return user?.role || 'user';
+  // ========================================
+  // JWT ブラックリスト管理
+  // ========================================
+
+  async addToBlacklist(tokenJti, userId, expiresAt) {
+    const id = uuidv4();
+    await this.run(
+      'INSERT INTO jwt_blacklist (id, token_jti, user_id, expires_at) VALUES (?, ?, ?, ?)',
+      [id, tokenJti, userId, expiresAt]
+    );
+  }
+
+  async isTokenBlacklisted(tokenJti) {
+    const result = await this.get(
+      'SELECT * FROM jwt_blacklist WHERE token_jti = ? AND expires_at > CURRENT_TIMESTAMP',
+      [tokenJti]
+    );
+    return !!result;
+  }
+
+  async cleanupExpiredTokens() {
+    const result = await this.run('DELETE FROM jwt_blacklist WHERE expires_at <= CURRENT_TIMESTAMP');
+    if (result.changes > 0) {
+      console.log(`[db] Cleaned up ${result.changes} expired tokens`);
+    }
   }
 
   // ========================================
-  // 決済管理メソッド
+  // レート制限管理
   // ========================================
-  
+
+  async checkRateLimit(identifier, identifierType, action, windowMs, maxAttempts) {
+    const windowStart = new Date(Date.now() - windowMs);
+    
+    const existing = await this.get(
+      'SELECT * FROM rate_limits WHERE identifier = ? AND identifier_type = ? AND action = ? AND window_start > ?',
+      [identifier, identifierType, action, windowStart.toISOString()]
+    );
+    
+    if (existing) {
+      if (existing.count >= maxAttempts) {
+        return { allowed: false, count: existing.count, resetAt: new Date(new Date(existing.window_start).getTime() + windowMs) };
+      } else {
+        // カウントを増加
+        await this.run('UPDATE rate_limits SET count = count + 1 WHERE id = ?', [existing.id]);
+        return { allowed: true, count: existing.count + 1 };
+      }
+    } else {
+      // 新しいウィンドウを作成
+      const id = uuidv4();
+      await this.run(
+        'INSERT INTO rate_limits (id, identifier, identifier_type, action, window_start) VALUES (?, ?, ?, ?, ?)',
+        [id, identifier, identifierType, action, new Date().toISOString()]
+      );
+      return { allowed: true, count: 1 };
+    }
+  }
+
+  async cleanupOldRateLimits() {
+    const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const result = await this.run('DELETE FROM rate_limits WHERE window_start < ?', [oneDayAgo.toISOString()]);
+    if (result.changes > 0) {
+      console.log(`[db] Cleaned up ${result.changes} old rate limit records`);
+    }
+  }
+
+  // ========================================
+  // セキュリティログ
+  // ========================================
+
+  async logSecurityEvent(userId, action, ipAddress = null, userAgent = null, details = null, riskLevel = 'low') {
+    const logId = uuidv4();
+    await this.run(
+      'INSERT INTO security_logs (id, user_id, action, ip_address, user_agent, details, risk_level) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [logId, userId, action, ipAddress, userAgent, details, riskLevel]
+    );
+  }
+
+  async getSecurityLogs(userId, limit = 50) {
+    return await this.all(
+      'SELECT * FROM security_logs WHERE user_id = ? ORDER BY created_at DESC LIMIT ?',
+      [userId, limit]
+    );
+  }
+
+  // ========================================
+  // 既存機能（デモ・使用量）の移行
+  // ========================================
+
+  // デモ使用管理（既存のまま）
+  async getDemoUsage(identifier, identifierType = 'ip') {
+    return await this.get(
+      'SELECT * FROM demo_usage WHERE identifier = ? AND identifier_type = ?',
+      [identifier, identifierType]
+    );
+  }
+
+  async incrementDemoUsage(identifiers, deviceInfo = null) {
+    const DEMO_LIMIT = 3;
+    const results = [];
+    
+    for (const { identifier, type } of identifiers) {
+      const existing = await this.getDemoUsage(identifier, type);
+      let newCount;
+      
+      if (existing) {
+        newCount = existing.usage_count + 1;
+        const isBanned = newCount >= DEMO_LIMIT;
+        
+        await this.run(`
+          UPDATE demo_usage 
+          SET usage_count = ?,
+              is_banned = ?,
+              last_used = CURRENT_TIMESTAMP,
+              device_info = ?
+          WHERE identifier = ? AND identifier_type = ?
+        `, [newCount, isBanned, deviceInfo, identifier, type]);
+        
+        if (isBanned) {
+          await this.addToBlacklist(identifier, type, `Demo limit exceeded (${newCount}/${DEMO_LIMIT})`, deviceInfo);
+        }
+      } else {
+        newCount = 1;
+        const id = uuidv4();
+        await this.run(`
+          INSERT INTO demo_usage 
+          (id, identifier, identifier_type, usage_count, last_used, device_info)
+          VALUES (?, ?, ?, 1, CURRENT_TIMESTAMP, ?)
+        `, [id, identifier, type, deviceInfo]);
+      }
+      
+      results.push({ identifier, type, count: newCount });
+    }
+    
+    return results;
+  }
+
+  async addToBlacklist(identifier, identifierType, reason, deviceInfo = null) {
+    const id = uuidv4();
+    await this.run(`
+      INSERT OR IGNORE INTO demo_blacklist 
+      (id, identifier, identifier_type, reason, device_info)
+      VALUES (?, ?, ?, ?, ?)
+    `, [id, identifier, identifierType, reason, deviceInfo]);
+  }
+
+  // 使用量追跡
+  async getTodayUsage(userId) {
+    const today = new Date().toISOString().split('T')[0];
+    return await this.get(
+      'SELECT * FROM usage_tracking WHERE user_id = ? AND date = ?',
+      [userId, today]
+    );
+  }
+
+  async incrementUsage(userId, type) {
+    const today = new Date().toISOString().split('T')[0];
+    const column = type === 'article' ? 'article_count' : 'regeneration_count';
+    
+    await this.run(`
+      INSERT INTO usage_tracking (id, user_id, date, ${column})
+      VALUES (?, ?, ?, 1)
+      ON CONFLICT(user_id, date)
+      DO UPDATE SET 
+        ${column} = ${column} + 1,
+        updated_at = CURRENT_TIMESTAMP
+    `, [uuidv4(), userId, today]);
+  }
+
+  // 決済管理
   async updatePaymentStatus(userId, paymentData) {
     const { status, plan, amount, expirationDate, note } = paymentData;
     await this.run(`
@@ -265,24 +514,14 @@ class Database {
   }
 
   async checkPaymentStatus(email) {
-    const user = await this.get(`
-      SELECT payment_status, expiration_date 
-      FROM users 
-      WHERE email = ?
-    `, [email]);
-    
+    const user = await this.getUserByEmail(email);
     if (!user) return null;
     
-    // 有効期限チェック
     if (user.payment_status === 'paid' && user.expiration_date) {
       const now = new Date();
       const expiry = new Date(user.expiration_date);
       if (expiry < now) {
-        // 期限切れの場合、ステータスを更新
-        await this.run(
-          'UPDATE users SET payment_status = ? WHERE email = ?',
-          ['expired', email]
-        );
+        await this.run('UPDATE users SET payment_status = ? WHERE id = ?', ['expired', user.id]);
         return 'expired';
       }
     }
@@ -290,8 +529,13 @@ class Database {
     return user.payment_status;
   }
 
+  async getUserRole(userId) {
+    const user = await this.get('SELECT role FROM users WHERE id = ?', [userId]);
+    return user?.role || 'user';
+  }
+
   // ========================================
-  // デモ使用管理メソッド（強化版）
+  // デモ使用管理メソッド
   // ========================================
   
   async getDemoUsage(identifier, identifierType = 'ip') {
@@ -385,219 +629,6 @@ class Database {
     return results;
   }
 
-  // デモ使用統計の取得
-  async getDemoStats() {
-    const totalUsers = await this.get('SELECT COUNT(*) as count FROM demo_usage');
-    const bannedUsers = await this.get('SELECT COUNT(*) as count FROM demo_usage WHERE is_banned = TRUE');
-    const blacklistedUsers = await this.get('SELECT COUNT(*) as count FROM demo_blacklist');
-    
-    return {
-      totalDemoUsers: totalUsers.count,
-      bannedUsers: bannedUsers.count,
-      blacklistedUsers: blacklistedUsers.count
-    };
-  }
-
-  // ========================================
-  // WebAuthn認証情報管理
-  // ========================================
-
-  async saveCredential(userId, credentialData) {
-    const credentialId = uuidv4();
-    await this.run(`
-      INSERT INTO user_credentials (
-        id, user_id, credential_id, credential_public_key, 
-        counter, credential_device_type, credential_backed_up, transports
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `, [
-      credentialId,
-      userId,
-      credentialData.id,
-      credentialData.publicKey,
-      credentialData.counter,
-      credentialData.deviceType,
-      credentialData.backedUp,
-      JSON.stringify(credentialData.transports)
-    ]);
-    return credentialId;
-  }
-
-  async getCredentialByCredentialId(credentialId) {
-    const row = await this.get(
-      'SELECT * FROM user_credentials WHERE credential_id = ?',
-      [credentialId]
-    );
-    if (row) {
-      row.transports = JSON.parse(row.transports || '[]');
-      
-      // 最後の使用時刻を更新
-      await this.run(
-        'UPDATE user_credentials SET last_used = CURRENT_TIMESTAMP WHERE credential_id = ?',
-        [credentialId]
-      );
-    }
-    return row;
-  }
-
-  async getUserCredentials(userId) {
-    const rows = await this.all(
-      'SELECT * FROM user_credentials WHERE user_id = ? ORDER BY last_used DESC',
-      [userId]
-    );
-    return rows.map(row => ({
-      ...row,
-      transports: JSON.parse(row.transports || '[]')
-    }));
-  }
-
-  async updateCredentialCounter(credentialId, newCounter) {
-    await this.run(
-      'UPDATE user_credentials SET counter = ?, last_used = CURRENT_TIMESTAMP WHERE credential_id = ?',
-      [newCounter, credentialId]
-    );
-  }
-
-  // ========================================
-  // セッション管理
-  // ========================================
-
-  async createSession(userId, sessionData, expiresAt, userAgent = null, ipAddress = null) {
-    const sessionId = uuidv4();
-    await this.run(
-      `INSERT INTO user_sessions 
-       (id, user_id, session_data, expires_at, user_agent, ip_address) 
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [sessionId, userId, JSON.stringify(sessionData), expiresAt, userAgent, ipAddress]
-    );
-    
-    // 認証ログを記録
-    await this.logAuthAction(userId, 'login', ipAddress, userAgent, 'Session created');
-    
-    return sessionId;
-  }
-
-  async getSession(sessionId) {
-    const row = await this.get(
-      `SELECT * FROM user_sessions 
-       WHERE id = ? AND expires_at > CURRENT_TIMESTAMP AND is_active = TRUE`,
-      [sessionId]
-    );
-    if (row) {
-      row.session_data = JSON.parse(row.session_data);
-      
-      // 最後のアクセス時刻を更新
-      await this.run(
-        'UPDATE user_sessions SET last_accessed = CURRENT_TIMESTAMP WHERE id = ?',
-        [sessionId]
-      );
-    }
-    return row;
-  }
-
-  async deleteSession(sessionId) {
-    const session = await this.get('SELECT user_id FROM user_sessions WHERE id = ?', [sessionId]);
-    await this.run('DELETE FROM user_sessions WHERE id = ?', [sessionId]);
-    
-    // 認証ログを記録
-    if (session) {
-      await this.logAuthAction(session.user_id, 'logout', null, null, 'Session deleted');
-    }
-  }
-
-  async cleanupExpiredSessions() {
-    const result = await this.run('DELETE FROM user_sessions WHERE expires_at <= CURRENT_TIMESTAMP');
-    if (result.changes > 0) {
-      console.log(`[db] Cleaned up ${result.changes} expired sessions`);
-    }
-  }
-
-  // ========================================
-  // チャレンジ管理
-  // ========================================
-
-  async saveChallenge(challenge, userId, type, expiresAt, ipAddress = null, userAgent = null) {
-    await this.run(
-      'INSERT INTO auth_challenges (challenge, user_id, type, expires_at, ip_address, user_agent) VALUES (?, ?, ?, ?, ?, ?)',
-      [challenge, userId, type, expiresAt, ipAddress, userAgent]
-    );
-  }
-
-  async getChallenge(challenge) {
-    return await this.get(
-      'SELECT * FROM auth_challenges WHERE challenge = ? AND expires_at > CURRENT_TIMESTAMP',
-      [challenge]
-    );
-  }
-
-  async deleteChallenge(challenge) {
-    await this.run('DELETE FROM auth_challenges WHERE challenge = ?', [challenge]);
-  }
-
-  async cleanupExpiredChallenges() {
-    const result = await this.run('DELETE FROM auth_challenges WHERE expires_at <= CURRENT_TIMESTAMP');
-    if (result.changes > 0) {
-      console.log(`[db] Cleaned up ${result.changes} expired challenges`);
-    }
-  }
-
-  // ========================================
-  // 認証ログ管理（新機能）
-  // ========================================
-
-  async logAuthAction(userId, action, ipAddress = null, userAgent = null, details = null) {
-    const logId = uuidv4();
-    await this.run(
-      `INSERT INTO auth_logs (id, user_id, action, ip_address, user_agent, details) 
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [logId, userId, action, ipAddress, userAgent, details]
-    );
-  }
-
-  async getAuthLogs(userId, limit = 50) {
-    return await this.all(
-      `SELECT * FROM auth_logs WHERE user_id = ? 
-       ORDER BY created_at DESC LIMIT ?`,
-      [userId, limit]
-    );
-  }
-
-  async getFailedLoginAttempts(ipAddress, minutes = 15) {
-    const since = new Date(Date.now() - minutes * 60 * 1000).toISOString();
-    const result = await this.get(
-      `SELECT COUNT(*) as count FROM auth_logs 
-       WHERE action = 'failed_login' AND ip_address = ? AND created_at > ?`,
-      [ipAddress, since]
-    );
-    return result.count;
-  }
-
-  // ========================================
-  // 使用量追跡
-  // ========================================
-
-  async getTodayUsage(userId) {
-    const today = new Date().toISOString().split('T')[0];
-    return await this.get(
-      'SELECT * FROM usage_tracking WHERE user_id = ? AND date = ?',
-      [userId, today]
-    );
-  }
-
-  async incrementUsage(userId, type) {
-    const today = new Date().toISOString().split('T')[0];
-    const column = type === 'article' ? 'article_count' : 'regeneration_count';
-    
-    // UPSERT操作
-    await this.run(`
-      INSERT INTO usage_tracking (id, user_id, date, ${column})
-      VALUES (?, ?, ?, 1)
-      ON CONFLICT(user_id, date)
-      DO UPDATE SET 
-        ${column} = ${column} + 1,
-        updated_at = CURRENT_TIMESTAMP
-    `, [uuidv4(), userId, today]);
-  }
-
   async close() {
     if (this.db) {
       return new Promise((resolve) => {
@@ -614,4 +645,4 @@ class Database {
   }
 }
 
-export default Database;
+export default SecureDatabase;
