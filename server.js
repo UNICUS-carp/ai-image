@@ -2,7 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import rateLimit from 'express-rate-limit';
 import SecureDatabase from './database.js';
-import EmailAuthenticator from './auth.js';
+import EmailAuthenticator from './auth_resend.js';
 import ConfigManager from './config.js';
 
 const app = express();
