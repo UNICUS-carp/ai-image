@@ -38,8 +38,11 @@ class EmailAuthenticator {
         pass: process.env.SMTP_PASS
       },
       tls: {
-        rejectUnauthorized: true
-      }
+        rejectUnauthorized: false // Railway環境でのSSL証明書問題を回避
+      },
+      connectionTimeout: 10000, // 10秒タイムアウト
+      greetingTimeout: 5000, // 5秒グリーティングタイムアウト
+      socketTimeout: 10000 // 10秒ソケットタイムアウト
     });
 
     // メール設定を検証
