@@ -18,7 +18,8 @@ class ConfigManager {
       'SMTP_PORT': 'Will use default port 587',
       'SMTP_USER': 'Will use console output for emails',
       'SMTP_PASS': 'Will use console output for emails',
-      'SMTP_FROM': 'Will use default sender address'
+      'SMTP_FROM': 'Will use default sender address',
+      'RESEND_API_KEY': 'Will use console output for emails'
     };
   }
 
