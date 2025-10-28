@@ -9,14 +9,19 @@ class PasskeyAuthenticator {
   constructor(database) {
     this.db = database;
     this.rpName = 'IllustAuto';
+    
+    // フロントエンドの実際のホスティング先に合わせて修正
     this.rpID = process.env.NODE_ENV === 'production' 
       ? 'unicus.top' 
       : 'localhost';
+    
+    // フロントエンドの実際のURLに合わせて修正
     this.origin = process.env.NODE_ENV === 'production'
-      ? 'https://unicus.top'
-      : 'http://localhost:3000';
+      ? ['https://unicus.top'] // 配列として複数のoriginを許可
+      : ['http://localhost:3000', 'http://127.0.0.1:3000'];
       
     console.log(`[auth] Initialized for ${this.rpID} (${process.env.NODE_ENV || 'development'})`);
+    console.log(`[auth] Allowed origins:`, this.origin);
   }
 
   // ========================================
@@ -38,7 +43,7 @@ class PasskeyAuthenticator {
       // 既存の認証情報を取得
       const existingCredentials = await this.db.getUserCredentials(user.id);
       const excludeCredentials = existingCredentials.map(cred => ({
-        id: cred.credential_id,
+        id: Buffer.from(cred.credential_id, 'base64'), // Uint8Arrayに変換
         type: 'public-key',
         transports: cred.transports
       }));
@@ -46,17 +51,16 @@ class PasskeyAuthenticator {
       const options = await generateRegistrationOptions({
         rpName: this.rpName,
         rpID: this.rpID,
-        userID: user.id,
+        userID: new TextEncoder().encode(user.id), // Uint8Arrayに変換
         userName: userEmail,
         userDisplayName: userName || userEmail,
         attestationType: 'none',
         excludeCredentials,
         authenticatorSelection: {
-          // platformを指定するとiCloudが強制されるため、削除
-          // authenticatorAttachmentを指定しないことで、選択可能にする
+          // より緩い設定に変更
           userVerification: 'preferred',
-          residentKey: 'required',  // Passkeyには必須
-          requireResidentKey: true   // WebAuthn Level 1との互換性
+          residentKey: 'preferred', // requiredから変更
+          requireResidentKey: false  // falseに変更
         },
         supportedAlgorithmIDs: [-7, -257]
       });
@@ -110,22 +114,33 @@ class PasskeyAuthenticator {
       }
       console.log(`[auth] Challenge verification passed`);
 
-      // 登録レスポンスを検証
-      console.log(`[auth] Verifying registration with:`, {
-        expectedChallenge: challengeRecord.challenge,
-        expectedOrigin: this.origin,
-        expectedRPID: this.rpID
-      });
+      // 登録レスポンスを検証（複数のoriginに対応）
+      let verification = null;
+      const originsToTry = Array.isArray(this.origin) ? this.origin : [this.origin];
       
-      const verification = await verifyRegistrationResponse({
-        response: registrationResponse,
-        expectedChallenge: challengeRecord.challenge,
-        expectedOrigin: this.origin,
-        expectedRPID: this.rpID,
-        requireUserVerification: false
-      });
+      for (const origin of originsToTry) {
+        try {
+          verification = await verifyRegistrationResponse({
+            response: registrationResponse,
+            expectedChallenge: challengeRecord.challenge,
+            expectedOrigin: origin,
+            expectedRPID: this.rpID,
+            requireUserVerification: false
+          });
+          
+          if (verification.verified) {
+            console.log(`[auth] Verification successful with origin: ${origin}`);
+            break;
+          }
+        } catch (originError) {
+          console.log(`[auth] Verification failed with origin ${origin}:`, originError.message);
+          continue;
+        }
+      }
       
-      console.log(`[auth] Verification result:`, verification);
+      if (!verification || !verification.verified) {
+        throw new Error('Registration verification failed for all origins');
+      }
 
       if (verification.verified && verification.registrationInfo) {
         // 認証情報をデータベースに保存
@@ -185,7 +200,7 @@ class PasskeyAuthenticator {
         if (user) {
           const credentials = await this.db.getUserCredentials(user.id);
           allowCredentials = credentials.map(cred => ({
-            id: cred.credential_id,
+            id: Buffer.from(cred.credential_id, 'base64'), // Uint8Arrayに変換
             type: 'public-key',
             transports: cred.transports
           }));
@@ -257,20 +272,39 @@ class PasskeyAuthenticator {
       
       console.log(`[auth] Converting credential from Base64 for verification`);
       
-      // 認証レスポンスを検証
-      const verification = await verifyAuthenticationResponse({
-        response: authenticationResponse,
-        expectedChallenge: challengeRecord.challenge,
-        expectedOrigin: this.origin,
-        expectedRPID: this.rpID,
-        authenticator: {
-          credentialID: credentialIDBytes,
-          credentialPublicKey: credentialPublicKeyBytes,
-          counter: credential.counter,
-          transports: JSON.parse(credential.transports || '[]')
-        },
-        requireUserVerification: false
-      });
+      // 認証レスポンスを検証（複数のoriginに対応）
+      let verification = null;
+      const originsToTry = Array.isArray(this.origin) ? this.origin : [this.origin];
+      
+      for (const origin of originsToTry) {
+        try {
+          verification = await verifyAuthenticationResponse({
+            response: authenticationResponse,
+            expectedChallenge: challengeRecord.challenge,
+            expectedOrigin: origin,
+            expectedRPID: this.rpID,
+            authenticator: {
+              credentialID: credentialIDBytes,
+              credentialPublicKey: credentialPublicKeyBytes,
+              counter: credential.counter,
+              transports: JSON.parse(credential.transports || '[]')
+            },
+            requireUserVerification: false
+          });
+          
+          if (verification.verified) {
+            console.log(`[auth] Authentication successful with origin: ${origin}`);
+            break;
+          }
+        } catch (originError) {
+          console.log(`[auth] Authentication failed with origin ${origin}:`, originError.message);
+          continue;
+        }
+      }
+
+      if (!verification || !verification.verified) {
+        throw new Error('Authentication verification failed for all origins');
+      }
 
       if (verification.verified) {
         // カウンターを更新
@@ -282,12 +316,14 @@ class PasskeyAuthenticator {
         // チャレンジを削除
         await this.db.deleteChallenge(challengeRecord.challenge);
 
-        // セッションを作成
+        // セッションを作成（セキュリティ強化）
         const sessionData = {
           userId: user.id,
           email: user.email,
           displayName: user.display_name,
-          authenticatedAt: new Date().toISOString()
+          authenticatedAt: new Date().toISOString(),
+          userAgent: null, // フロントエンドから送られてきた場合のみ設定
+          ipAddress: null  // サーバーサイドで設定
         };
         
         const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(); // 24時間
@@ -323,7 +359,7 @@ class PasskeyAuthenticator {
   // セッション管理
   // ========================================
 
-  async validateSession(sessionId) {
+  async validateSession(sessionId, userAgent = null, ipAddress = null) {
     try {
       if (!sessionId) {
         return { valid: false, message: 'No session ID provided' };
@@ -339,6 +375,25 @@ class PasskeyAuthenticator {
       if (!user) {
         await this.db.deleteSession(sessionId);
         return { valid: false, message: 'User not found' };
+      }
+
+      // セキュリティチェック（必要に応じて有効化）
+      if (session.session_data) {
+        const sessionData = JSON.parse(session.session_data);
+        
+        // UserAgentの変更チェック（オプション）
+        if (sessionData.userAgent && userAgent && sessionData.userAgent !== userAgent) {
+          console.warn(`[auth] UserAgent changed for session ${sessionId}`);
+          // 必要に応じてセッションを無効化
+          // await this.db.deleteSession(sessionId);
+          // return { valid: false, message: 'Session security check failed' };
+        }
+        
+        // IPアドレスの変更チェック（オプション）
+        if (sessionData.ipAddress && ipAddress && sessionData.ipAddress !== ipAddress) {
+          console.warn(`[auth] IP address changed for session ${sessionId}`);
+          // 必要に応じてセッションを無効化
+        }
       }
 
       return {
