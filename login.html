@@ -336,10 +336,12 @@
               
               console.log('✅ 認証成功！即座にリダイレクト');
               
-              // 安全にリダイレクト
-              setTimeout(() => {
-                window.location.href = './app.html';
-              }, 50);
+              // フォームを完全に無効化してからリダイレクト
+              document.getElementById('authCode').disabled = true;
+              document.removeEventListener('keypress', arguments.callee);
+              
+              // 即座にリダイレクト（遅延なし）
+              window.location.href = './app.html';
             } else {
               console.log('❌ 認証失敗 - data.success or data.tokens が false');
               showMessage(data.message || '認証に失敗しました', 'error');
