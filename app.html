@@ -535,12 +535,15 @@
 
     // 初期化
     document.addEventListener('DOMContentLoaded', function() {
-      console.log('app.html読み込み開始');
-      console.log('アクセストークン:', localStorage.getItem('access_token'));
+      console.log('🎯 app.html が正常に読み込まれました！');
+      alert('app.htmlページに到達しました！');
+      
+      const token = localStorage.getItem('access_token');
+      console.log('トークン確認:', token ? 'あり(' + token.substring(0, 20) + '...)' : 'なし');
       
       if (!checkAuth()) return;
       
-      console.log('認証チェック通過');
+      console.log('✅ 認証チェック通過 - アプリ機能を初期化中');
       getUserInfo();
       
       // 文字数カウント
