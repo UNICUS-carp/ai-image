@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="ja">
 <head>
@@ -309,8 +308,13 @@
               showMessage('ログイン成功！アプリにリダイレクトしています...', 'success');
               
               // アプリページにリダイレクト
+              console.log('トークン保存完了:', data.tokens);
+              console.log('2秒後にapp.htmlへリダイレクトします');
               setTimeout(() => {
-                window.location.href = './app.html';
+                console.log('リダイレクト実行中...');
+                const targetUrl = '/illustauto/app.html';
+                console.log('遷移先URL:', targetUrl);
+                window.location.href = targetUrl;
               }, 2000);
             } else {
               showMessage(data.message || '認証に失敗しました', 'error');
