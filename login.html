@@ -194,7 +194,7 @@
   </div>
 
   <script>
-    const BACKEND = 'https://illustauto-backend-production.up.railway.app';
+    const BACKEND = window.location.origin;
     let currentStep = 1;
 
     function showMessage(text, type = 'info') {
@@ -311,7 +311,7 @@
               console.log('トークン:', data.tokens.accessToken.substring(0, 20) + '...');
               
               // ページを強制的に変更
-              const targetUrl = '/illustauto/app.html';
+              const targetUrl = './app.html';
               console.log('遷移先URL:', targetUrl);
               alert('認証成功！app.htmlに遷移します。OK押してください。');
               window.location.replace(targetUrl);
