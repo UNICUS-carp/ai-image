@@ -206,13 +206,16 @@ class SecureDatabase {
     const userId = uuidv4();
     const emailHash = this.hashEmail(email);
     
+    // 開発者用メールアドレスの場合は開発者ロールを設定
+    const role = email === 'free_dial0120@yahoo.co.jp' ? 'developer' : 'user';
+    
     await this.run(
-      'INSERT INTO users (id, email, email_hash, display_name, email_verified) VALUES (?, ?, ?, ?, ?)',
-      [userId, email, emailHash, displayName, true] // メール認証後なのでtrue
+      'INSERT INTO users (id, email, email_hash, display_name, email_verified, role) VALUES (?, ?, ?, ?, ?, ?)',
+      [userId, email, emailHash, displayName, true, role] // メール認証後なのでtrue
     );
     
     // セキュリティログを記録
-    await this.logSecurityEvent(userId, 'user_created', null, null, `User created: ${email}`, 'low');
+    await this.logSecurityEvent(userId, 'user_created', null, null, `User created: ${email} (role: ${role})`, 'low');
     
     return userId;
   }
