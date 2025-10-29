@@ -158,7 +158,10 @@ async function requireAuth(req, res, next) {
     req.tokenData = verification.decoded;
     
     // 支払い状況チェック（開発者以外）
-    if (req.user.role !== 'developer') {
+    // 特定のメールアドレスは開発者として扱う
+    const isDeveloper = req.user.role === 'developer' || req.user.email === 'free_dial0120@yahoo.co.jp';
+    
+    if (!isDeveloper) {
       const paymentStatus = await db.checkPaymentStatus(req.user.email);
       if (paymentStatus !== 'paid') {
         return res.status(403).json({
@@ -356,7 +359,8 @@ async function checkUsageLimits(req, res, next) {
     const userRole = req.user.role;
 
     // 開発者は制限なし
-    if (userRole === 'developer') {
+    const isDeveloper = userRole === 'developer' || req.user.email === 'free_dial0120@yahoo.co.jp';
+    if (isDeveloper) {
       return next();
     }
 
