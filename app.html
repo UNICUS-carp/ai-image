@@ -372,27 +372,38 @@
     // ユーザー情報取得
     async function getUserInfo() {
       const token = localStorage.getItem('access_token');
+      console.log('👤 ユーザー情報取得開始...');
+      
       try {
         const xhr = new XMLHttpRequest();
         xhr.open('GET', `${BACKEND}/api/auth/me`, true);
         xhr.setRequestHeader('Authorization', `Bearer ${token}`);
         
         xhr.onload = function() {
+          console.log('📡 サーバーレスポンス:', xhr.status, xhr.responseText);
+          
           if (xhr.status === 200) {
             const data = JSON.parse(xhr.responseText);
             userEmail = data.user.email;
             document.getElementById('userInfo').textContent = `👤 ${data.user.email}`;
+            console.log('✅ ユーザー情報取得成功:', data.user.email);
           } else {
+            console.log('❌ 認証失敗 - ログアウト実行');
+            alert(`認証エラー: ${xhr.status}\n${xhr.responseText}\n\nログアウトします。`);
             logout();
           }
         };
         
         xhr.onerror = function() {
+          console.log('❌ ネットワークエラー - ログアウト実行');
+          alert('ネットワークエラーが発生しました。\n\nログアウトします。');
           logout();
         };
         
         xhr.send();
       } catch (error) {
+        console.log('❌ リクエストエラー:', error);
+        alert(`リクエストエラー: ${error.message}\n\nログアウトします。`);
         logout();
       }
     }
