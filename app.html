@@ -537,6 +537,17 @@
     document.addEventListener('DOMContentLoaded', function() {
       console.log('🎯 app.html読み込み開始');
       
+      // デバッグ用：強制停止
+      const token = localStorage.getItem('access_token');
+      console.log('🔑 localStorage確認:', {
+        access_token: token ? `存在 (${token.substring(0, 20)}...)` : '未保存',
+        refresh_token: localStorage.getItem('refresh_token') ? '存在' : '未保存',
+        length: token ? token.length : 0
+      });
+      
+      // 10秒間停止してデバッグ
+      alert('🔍 デバッグモード: F12でコンソールを確認してください。OKを押すと認証チェックが実行されます。');
+      
       // 最初に認証チェック
       if (!checkAuth()) {
         console.log('❌ 認証失敗 - 初期化中止');
