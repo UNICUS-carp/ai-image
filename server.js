@@ -82,10 +82,10 @@ app.set('trust proxy', true);
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// 基本的なレート制限
+// 基本的なレート制限（デバッグ用に緩和）
 const basicLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15分
-  max: 100, // 100リクエスト
+  max: 1000, // 1000リクエスト（デバッグ用に増加）
   message: { error: 'RATE_LIMITED', message: 'リクエストが多すぎます' },
   trustProxy: 1 // Railway プロキシを信頼（1つのプロキシのみ）
 });
@@ -210,13 +210,20 @@ app.post('/api/auth/request-code', async (req, res) => {
 // 認証コード検証とログイン
 app.post('/api/auth/verify-code', async (req, res) => {
   try {
+    console.log('[debug] verify-code リクエスト受信');
+    console.log('[debug] req.body:', req.body);
+    console.log('[debug] Content-Type:', req.headers['content-type']);
+    
     const { email, code } = req.body;
     const clientIp = req.headers['x-forwarded-for']?.split(',')[0] || 
                     req.headers['x-real-ip'] || 
                     req.connection.remoteAddress;
     const userAgent = req.headers['user-agent'];
 
+    console.log('[debug] parsed values:', { email, code, clientIp });
+
     if (!email || !code) {
+      console.log('[debug] Missing email or code - returning 400');
       return res.status(400).json({
         error: 'INVALID_REQUEST',
         message: 'メールアドレスと認証コードが必要です'
@@ -228,11 +235,15 @@ app.post('/api/auth/verify-code', async (req, res) => {
     res.json(result);
   } catch (error) {
     console.error('[api] Auth verification error:', error);
+    console.error('[api] Error message:', error.message);
+    console.error('[api] Error stack:', error.stack);
     
     let statusCode = 400;
     if (error.message.includes('多すぎます') || error.message.includes('ロック')) {
       statusCode = 429;
     }
+    
+    console.log('[debug] Sending error response:', statusCode, error.message);
     
     res.status(statusCode).json({
       error: 'AUTHENTICATION_FAILED',
