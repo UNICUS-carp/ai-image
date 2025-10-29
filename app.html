@@ -356,14 +356,20 @@
     function checkAuth() {
       const token = localStorage.getItem('access_token');
       
-      // トークンがない場合は必ずlogin.htmlにリダイレクト
+      // デバッグ用：絶対にリダイレクトしない
+      console.log('🔍 checkAuth実行中...');
+      console.log('🔑 取得したトークン:', token ? `存在 (${token.substring(0, 30)}...)` : 'null/undefined');
+      
+      // トークンがない場合でも一旦リダイレクトしない
       if (!token) {
-        console.log('❌ 認証トークンなし - login.htmlにリダイレクト');
+        console.log('❌ 認証トークンなし');
+        alert('❌ 認証トークンが保存されていません！\n\nOKを押すとlogin.htmlに戻ります。');
         window.location.href = './login.html';
         return false;
       }
       
       console.log('✅ 認証トークン確認済み');
+      alert('✅ トークンが確認できました！\n\n次はサーバー認証を確認します。');
       return true;
     }
 
