@@ -235,19 +235,25 @@ class SecureDatabase {
 
   async incrementLoginAttempts(email) {
     const emailHash = this.hashEmail(email);
+    
+    // アトミックな操作: 試行回数を増加し、同時に新しい値を取得
     const result = await this.run(
       'UPDATE users SET login_attempts = login_attempts + 1 WHERE email_hash = ?',
       [emailHash]
     );
     
-    // 5回失敗したらロック（15分間）
+    // 更新後の値を取得
     const user = await this.getUserByEmail(email);
-    if (user && user.login_attempts >= 4) { // 次で5回目
+    if (!user) return result;
+    
+    // 5回失敗したらロック（15分間） - 更新された値で判定
+    if (user.login_attempts >= 5) {
       const lockUntil = new Date(Date.now() + 15 * 60 * 1000); // 15分後
       await this.run(
-        'UPDATE users SET locked_until = ? WHERE email_hash = ?',
+        'UPDATE users SET locked_until = ? WHERE email_hash = ? AND login_attempts >= 5',
         [lockUntil.toISOString(), emailHash]
       );
+      console.log(`[db] User locked after ${user.login_attempts} failed attempts: ${email}`);
     }
     
     return result;
@@ -295,39 +301,44 @@ class SecureDatabase {
     // 現在時刻をJavaScriptで取得してISO文字列にする（SQLiteとの一貫性を保つため）
     const currentTime = new Date().toISOString();
     
-    const authCode = await this.get(
-      'SELECT * FROM auth_codes WHERE email_hash = ? AND used = FALSE AND expires_at > ? ORDER BY created_at DESC LIMIT 1',
+    // アトミックな操作: 使用済みマークと同時に取得
+    const result = await this.run(
+      'UPDATE auth_codes SET used = TRUE WHERE email_hash = ? AND used = FALSE AND expires_at > ? AND attempts < 3',
       [emailHash, currentTime]
     );
     
-    console.log(`[db] verifyAuthCode - email: ${email}, currentTime: ${currentTime}`);
-    console.log(`[db] verifyAuthCode - authCode found: ${!!authCode}`);
-    if (authCode) {
-      console.log(`[db] verifyAuthCode - expires_at: ${authCode.expires_at}, attempts: ${authCode.attempts}`);
-    }
-    
-    if (!authCode) {
+    // 更新されたレコードがない場合は失敗
+    if (result.changes === 0) {
+      console.log(`[db] verifyAuthCode - no available code found for atomic update`);
       return { valid: false, reason: 'Code not found or expired' };
     }
     
-    // 試行回数をチェック
-    if (authCode.attempts >= 3) {
-      return { valid: false, reason: 'Too many attempts' };
+    // 更新されたレコードを取得
+    const authCode = await this.get(
+      'SELECT * FROM auth_codes WHERE email_hash = ? AND used = TRUE ORDER BY created_at DESC LIMIT 1',
+      [emailHash]
+    );
+    
+    console.log(`[db] verifyAuthCode - email: ${email}, currentTime: ${currentTime}`);
+    console.log(`[db] verifyAuthCode - atomic update successful, verifying code`);
+    
+    if (!authCode) {
+      console.log(`[db] verifyAuthCode - failed to retrieve updated record`);
+      return { valid: false, reason: 'Code verification failed' };
     }
     
-    // 試行回数を増加
-    await this.run('UPDATE auth_codes SET attempts = attempts + 1 WHERE id = ?', [authCode.id]);
-    
-    // コードを検証
+    // コードを検証（既に使用済みマークされているので、検証のみ）
     const isValid = await this.verifyCode(code, authCode.code_hash);
     
     console.log(`[db] verifyAuthCode - code verification result: ${isValid}`);
     
     if (isValid) {
-      // 使用済みにマーク
-      await this.run('UPDATE auth_codes SET used = TRUE WHERE id = ?', [authCode.id]);
+      console.log(`[db] verifyAuthCode - success with atomic operation`);
       return { valid: true, codeId: authCode.id };
     } else {
+      // 検証失敗の場合、使用済みマークを戻す
+      await this.run('UPDATE auth_codes SET used = FALSE WHERE id = ?', [authCode.id]);
+      console.log(`[db] verifyAuthCode - code invalid, reverted used flag`);
       return { valid: false, reason: 'Invalid code' };
     }
   }
@@ -373,34 +384,37 @@ class SecureDatabase {
 
   async checkRateLimit(identifier, identifierType, action, windowMs, maxAttempts) {
     const windowStart = new Date(Date.now() - windowMs);
+    const now = new Date().toISOString();
     
-    const existing = await this.get(
-      'SELECT * FROM rate_limits WHERE identifier = ? AND identifier_type = ? AND action = ? AND window_start > ?',
-      [identifier, identifierType, action, windowStart.toISOString()]
+    // アトミックな UPSERT 操作で競合状態を回避
+    const id = uuidv4();
+    const result = await this.run(`
+      INSERT INTO rate_limits (id, identifier, identifier_type, action, count, window_start) 
+      VALUES (?, ?, ?, ?, 1, ?)
+      ON CONFLICT(identifier, identifier_type, action) 
+      DO UPDATE SET 
+        count = CASE 
+          WHEN window_start <= ? THEN 1 
+          ELSE count + 1 
+        END,
+        window_start = CASE 
+          WHEN window_start <= ? THEN ? 
+          ELSE window_start 
+        END
+    `, [id, identifier, identifierType, action, now, windowStart.toISOString(), windowStart.toISOString(), now]);
+    
+    // 更新後の値を取得して制限チェック
+    const updated = await this.get(
+      'SELECT * FROM rate_limits WHERE identifier = ? AND identifier_type = ? AND action = ?',
+      [identifier, identifierType, action]
     );
     
-    if (existing) {
-      if (existing.count >= maxAttempts) {
-        return { allowed: false, count: existing.count, resetAt: new Date(new Date(existing.window_start).getTime() + windowMs) };
-      } else {
-        // カウントを増加
-        await this.run('UPDATE rate_limits SET count = count + 1 WHERE id = ?', [existing.id]);
-        return { allowed: true, count: existing.count + 1 };
-      }
-    } else {
-      // 既存のエントリをクリーンアップしてから新規作成
-      await this.run(
-        'DELETE FROM rate_limits WHERE identifier = ? AND identifier_type = ? AND action = ?',
-        [identifier, identifierType, action]
-      );
-      
-      const id = uuidv4();
-      await this.run(
-        'INSERT INTO rate_limits (id, identifier, identifier_type, action, window_start) VALUES (?, ?, ?, ?, ?)',
-        [id, identifier, identifierType, action, new Date().toISOString()]
-      );
-      return { allowed: true, count: 1 };
+    if (updated.count > maxAttempts) {
+      const resetAt = new Date(new Date(updated.window_start).getTime() + windowMs);
+      return { allowed: false, count: updated.count, resetAt };
     }
+    
+    return { allowed: true, count: updated.count };
   }
 
   async cleanupOldRateLimits() {
