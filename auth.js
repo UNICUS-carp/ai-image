@@ -85,6 +85,12 @@ class EmailAuthenticator {
         throw new Error('有効なメールアドレスを入力してください');
       }
 
+      // ホワイトリストチェック
+      if (!this.isEmailAllowed(email)) {
+        console.log(`[auth] Unauthorized email access attempt: ${email}`);
+        throw new Error('このメールアドレスはサービスの利用が許可されていません');
+      }
+
       // ユーザーロック状態をチェック
       if (await this.db.isUserLocked(email)) {
         throw new Error('アカウントが一時的にロックされています。しばらく待ってから再試行してください');
@@ -434,6 +440,17 @@ class EmailAuthenticator {
   isValidEmail(email) {
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     return emailRegex.test(email);
+  }
+
+  // ホワイトリスト管理
+  isEmailAllowed(email) {
+    // 環境変数からホワイトリストを取得（カンマ区切り）
+    const allowedEmails = process.env.ALLOWED_EMAILS 
+      ? process.env.ALLOWED_EMAILS.split(',').map(e => e.trim().toLowerCase())
+      : ['free_dial0120@yahoo.co.jp']; // デフォルト値
+    
+    console.log(`[auth] Checking email ${email} against whitelist:`, allowedEmails);
+    return allowedEmails.includes(email.toLowerCase());
   }
 
   async sendAuthCodeEmail(email, code) {
