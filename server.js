@@ -98,7 +98,7 @@ app.use(basicLimiter);
 
 // 静的ファイルミドルウェア
 app.use(express.static('.', {
-  index: 'index_final.html',  // デフォルトファイル
+  index: 'index.html',  // デフォルトファイル
   setHeaders: (res, path) => {
     if (path.endsWith('.html')) {
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
@@ -106,9 +106,17 @@ app.use(express.static('.', {
   }
 }));
 
-// ルートアクセス時にindex_final.htmlを配信
+// ページルーティング
 app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'index_final.html'));
+  res.sendFile(path.join(__dirname, 'index.html'));
+});
+
+app.get('/login.html', (req, res) => {
+  res.sendFile(path.join(__dirname, 'login.html'));
+});
+
+app.get('/app.html', (req, res) => {
+  res.sendFile(path.join(__dirname, 'app.html'));
 });
 
 // ========================================
