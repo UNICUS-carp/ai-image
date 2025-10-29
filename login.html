@@ -328,19 +328,23 @@
             console.log('パース後データ:', data);
             
             if (data.success && data.tokens) {
-              // トークンを保存
+              // トークンを確実に保存
               localStorage.setItem('access_token', data.tokens.accessToken);
               localStorage.setItem('refresh_token', data.tokens.refreshToken);
               
-              // ページ全体を即座に破壊
+              // 保存確認
+              console.log('🔑 トークン保存完了:', {
+                access_token: localStorage.getItem('access_token') ? '保存済み' : '失敗',
+                refresh_token: localStorage.getItem('refresh_token') ? '保存済み' : '失敗'
+              });
+              
+              // ページ破壊
               document.body.innerHTML = '<div style="text-align:center;padding:50px;font-size:18px;">✅ ログイン成功<br>アプリに移動中...</div>';
               
-              // 全てのイベントリスナーを無効化
-              window.onbeforeunload = null;
-              window.onunload = null;
-              
-              // location.replace で履歴を残さずリダイレクト
-              window.location.replace('./app.html');
+              // 確実にトークンが保存されてからリダイレクト
+              setTimeout(() => {
+                window.location.replace('./app.html');
+              }, 100);
             } else {
               console.log('❌ 認証失敗 - data.success or data.tokens が false');
               showMessage(data.message || '認証に失敗しました', 'error');
