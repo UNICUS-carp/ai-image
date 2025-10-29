@@ -372,14 +372,14 @@
       const token = localStorage.getItem('access_token');
       try {
         const xhr = new XMLHttpRequest();
-        xhr.open('GET', `${BACKEND}/api/user/profile`, true);
+        xhr.open('GET', `${BACKEND}/api/auth/me`, true);
         xhr.setRequestHeader('Authorization', `Bearer ${token}`);
         
         xhr.onload = function() {
           if (xhr.status === 200) {
             const data = JSON.parse(xhr.responseText);
-            userEmail = data.email;
-            document.getElementById('userInfo').textContent = `👤 ${data.email}`;
+            userEmail = data.user.email;
+            document.getElementById('userInfo').textContent = `👤 ${data.user.email}`;
           } else {
             logout();
           }
