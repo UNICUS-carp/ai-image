@@ -271,6 +271,7 @@
     }
 
     let isVerifying = false;
+    let pendingRequest = null;
     
     async function verifyCode() {
       // ボタンを即座に無効化
@@ -282,8 +283,8 @@
       loginBtn.disabled = true;
       loginBtn.textContent = '処理中...';
       
-      if (isVerifying) {
-        console.log('既に検証処理中です');
+      if (isVerifying || pendingRequest) {
+        console.log('既に検証処理中です - リクエスト中止');
         return;
       }
       
@@ -311,10 +312,12 @@
 
       try {
         const xhr = new XMLHttpRequest();
+        pendingRequest = xhr;
         xhr.open('POST', `${BACKEND}/api/auth/verify-code`, true);
         xhr.setRequestHeader('Content-Type', 'application/json');
         
         xhr.onload = function() {
+          pendingRequest = null;
           console.log('🔍 認証レスポンス詳細情報:');
           console.log('- HTTPステータス:', xhr.status);
           console.log('- レスポンステキスト:', xhr.responseText);
@@ -325,8 +328,7 @@
             console.log('パース後データ:', data);
             
             if (data.success && data.tokens) {
-              // 重複送信を即座に防ぐ
-              isVerifying = true;
+              // 重複送信を防ぐフラグはそのまま（既にtrue）
               
               // トークンを保存
               localStorage.setItem('access_token', data.tokens.accessToken);
@@ -363,6 +365,7 @@
         };
         
         xhr.onerror = function() {
+          pendingRequest = null;
           console.log('❌ ネットワークエラー');
           showMessage('ネットワークエラーが発生しました', 'error');
           loginBtn.disabled = false;
@@ -376,6 +379,7 @@
         }));
         
       } catch (error) {
+        pendingRequest = null;
         console.error('Verify error:', error);
         showMessage('認証エラーが発生しました', 'error');
         loginBtn.disabled = false;
