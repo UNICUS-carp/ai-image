@@ -160,7 +160,6 @@
     <div class="phase-indicator">
       <div class="phase active" id="phase1"></div>
       <div class="phase" id="phase2"></div>
-      <div class="phase" id="phase3"></div>
     </div>
     
     <!-- Step 1: Email Input -->
@@ -182,13 +181,7 @@
       <button class="btn" style="background: #6c757d; margin-top: 10px;" onclick="goBackToEmail()">戻る</button>
     </div>
     
-    <!-- Step 3: Success -->
-    <div id="step3" class="hidden">
-      <div class="message success">
-        <strong>✅ ログイン成功!</strong><br>
-        アプリページにリダイレクトしています...
-      </div>
-    </div>
+    <!-- Step 3: 削除（即座にリダイレクトするため不要） -->
     
     <div id="message"></div>
   </div>
@@ -209,7 +202,7 @@
     }
 
     function updatePhase(step) {
-      for (let i = 1; i <= 3; i++) {
+      for (let i = 1; i <= 2; i++) {
         const phase = document.getElementById(`phase${i}`);
         const stepDiv = document.getElementById(`step${i}`);
         
