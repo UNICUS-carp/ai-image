@@ -349,7 +349,7 @@
   </div>
 
   <script>
-    const BACKEND = 'https://illustauto-backend-production.up.railway.app';
+    const BACKEND = window.location.origin;
     let userEmail = '';
 
     // 認証チェック
@@ -361,7 +361,7 @@
         if (urlParams.get('direct') === 'true') {
           alert('ログインが必要です。ログインページに移動します。');
         }
-        window.location.href = '/illustauto/login.html';
+        window.location.href = './login.html';
         return false;
       }
       return true;
