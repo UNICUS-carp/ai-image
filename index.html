@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="ja">
 <head>
@@ -160,7 +159,7 @@
     
     <div class="btn-group">
       <a href="./login.html" class="btn btn-primary">🚀 ログイン・利用開始</a>
-      <a href="./app.html" class="btn btn-secondary">📱 アプリを直接開く</a>
+      <a href="./app.html?direct=true" class="btn btn-secondary">📱 アプリを直接開く</a>
     </div>
     
     <div class="status">
@@ -169,13 +168,20 @@
   </div>
 
   <script>
+    console.log('🏠 index.html (ランディングページ) 読み込み完了');
+    console.log('現在時刻:', new Date().toLocaleString());
+    
     // 既にログインしている場合は直接アプリページへ
-    if (localStorage.getItem('access_token')) {
+    const hasToken = localStorage.getItem('access_token');
+    console.log('保存済みトークン:', hasToken ? 'あり' : 'なし');
+    
+    if (hasToken) {
       document.querySelector('.btn-secondary').style.display = 'none';
       
       const loginBtn = document.querySelector('.btn-primary');
       loginBtn.textContent = '📱 アプリを開く';
-      loginBtn.href = './app.html';
+      loginBtn.href = '/illustauto/app.html';
+      console.log('ログイン済みユーザー - ボタンを "アプリを開く" に変更');
     }
   </script>
 </body>
