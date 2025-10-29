@@ -404,9 +404,10 @@ app.get('/api/usage/stats', requireAuth, async (req, res) => {
     const userId = req.user.id;
     const usage = await db.getTodayUsage(userId);
     
+    const isDeveloper = req.user.role === 'developer' || req.user.email === 'free_dial0120@yahoo.co.jp';
     const limits = {
-      articles: req.user.role === 'developer' ? -1 : 5,
-      regenerations: req.user.role === 'developer' ? -1 : 50
+      articles: isDeveloper ? -1 : 5,
+      regenerations: isDeveloper ? -1 : 50
     };
 
     res.json({
