@@ -305,17 +305,16 @@
               localStorage.setItem('refresh_token', data.tokens.refreshToken);
               
               updatePhase(3);
-              showMessage('ログイン成功！アプリにリダイレクトしています...', 'success');
               
-              // アプリページにリダイレクト
-              console.log('トークン保存完了:', data.tokens);
-              console.log('2秒後にapp.htmlへリダイレクトします');
-              setTimeout(() => {
-                console.log('リダイレクト実行中...');
-                const targetUrl = '/illustauto/app.html';
-                console.log('遷移先URL:', targetUrl);
-                window.location.href = targetUrl;
-              }, 2000);
+              // 即座にリダイレクト実行
+              console.log('認証成功 - 即座にリダイレクト実行');
+              console.log('トークン:', data.tokens.accessToken.substring(0, 20) + '...');
+              
+              // ページを強制的に変更
+              const targetUrl = '/illustauto/app.html';
+              console.log('遷移先URL:', targetUrl);
+              alert('認証成功！app.htmlに遷移します。OK押してください。');
+              window.location.replace(targetUrl);
             } else {
               showMessage(data.message || '認証に失敗しました', 'error');
             }
