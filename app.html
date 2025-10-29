@@ -349,21 +349,21 @@
   </div>
 
   <script>
-    const BACKEND = window.location.origin;
+    const BACKEND = 'https://illustauto-backend-production.up.railway.app';
     let userEmail = '';
 
-    // 認証チェック
+    // 認証チェック（直接アクセス禁止）
     function checkAuth() {
       const token = localStorage.getItem('access_token');
+      
+      // トークンがない場合は必ずlogin.htmlにリダイレクト
       if (!token) {
-        // URLにdirectアクセスのパラメータがある場合は警告を表示
-        const urlParams = new URLSearchParams(window.location.search);
-        if (urlParams.get('direct') === 'true') {
-          alert('ログインが必要です。ログインページに移動します。');
-        }
+        console.log('❌ 認証トークンなし - login.htmlにリダイレクト');
         window.location.href = './login.html';
         return false;
       }
+      
+      console.log('✅ 認証トークン確認済み');
       return true;
     }
 
@@ -535,15 +535,15 @@
 
     // 初期化
     document.addEventListener('DOMContentLoaded', function() {
-      console.log('🎯 app.html が正常に読み込まれました！');
-      alert('app.htmlページに到達しました！');
+      console.log('🎯 app.html読み込み開始');
       
-      const token = localStorage.getItem('access_token');
-      console.log('トークン確認:', token ? 'あり(' + token.substring(0, 20) + '...)' : 'なし');
+      // 最初に認証チェック
+      if (!checkAuth()) {
+        console.log('❌ 認証失敗 - 初期化中止');
+        return;
+      }
       
-      if (!checkAuth()) return;
-      
-      console.log('✅ 認証チェック通過 - アプリ機能を初期化中');
+      console.log('✅ 認証チェック通過 - アプリ初期化開始');
       getUserInfo();
       
       // 文字数カウント
