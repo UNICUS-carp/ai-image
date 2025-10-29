@@ -285,8 +285,10 @@ class EmailAuthenticator {
           displayName: user.display_name,
           role: user.role || 'user'
         },
-        accessToken: tokens.accessToken,
-        refreshToken: tokens.refreshToken,
+        tokens: {
+          accessToken: tokens.accessToken,
+          refreshToken: tokens.refreshToken
+        },
         expiresIn: 24 * 60 * 60, // 24時間（秒）
         message: 'ログインに成功しました'
       };
