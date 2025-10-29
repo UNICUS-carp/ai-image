@@ -194,7 +194,7 @@
   </div>
 
   <script>
-    const BACKEND = window.location.origin;
+    const BACKEND = 'https://illustauto-backend-production.up.railway.app';
     let currentStep = 1;
 
     function showMessage(text, type = 'info') {
@@ -277,17 +277,29 @@
       }
     }
 
+    let isVerifying = false;
+    
     async function verifyCode() {
+      if (isVerifying) {
+        console.log('既に検証処理中です');
+        return;
+      }
+      
+      isVerifying = true;
       const email = document.getElementById('email').value.trim();
       const authCode = document.getElementById('authCode').value.trim();
       
+      console.log('認証開始:', { email: email, code: authCode });
+      
       if (!authCode) {
         showMessage('認証コードを入力してください', 'error');
+        isVerifying = false;
         return;
       }
 
       if (authCode.length !== 6) {
         showMessage('認証コードは6桁です', 'error');
+        isVerifying = false;
         return;
       }
 
@@ -297,35 +309,50 @@
         xhr.setRequestHeader('Content-Type', 'application/json');
         
         xhr.onload = function() {
+          console.log('🔍 認証レスポンス詳細情報:');
+          console.log('- HTTPステータス:', xhr.status);
+          console.log('- レスポンステキスト:', xhr.responseText);
+          console.log('- レスポンスヘッダー:', xhr.getAllResponseHeaders());
+          
           if (xhr.status === 200) {
             const data = JSON.parse(xhr.responseText);
+            console.log('パース後データ:', data);
+            
             if (data.success && data.tokens) {
               // トークンを保存
               localStorage.setItem('access_token', data.tokens.accessToken);
               localStorage.setItem('refresh_token', data.tokens.refreshToken);
               
-              updatePhase(3);
+              console.log('✅ 認証成功！app.htmlに遷移します');
+              console.log('保存されたトークン:', data.tokens.accessToken.substring(0, 20) + '...');
               
-              // 即座にリダイレクト実行
-              console.log('認証成功 - 即座にリダイレクト実行');
-              console.log('トークン:', data.tokens.accessToken.substring(0, 20) + '...');
-              
-              // ページを強制的に変更
-              const targetUrl = './app.html';
-              console.log('遷移先URL:', targetUrl);
-              alert('認証成功！app.htmlに遷移します。OK押してください。');
-              window.location.replace(targetUrl);
+              // 即座にapp.htmlに遷移
+              console.log('🔄 app.htmlに遷移中...');
+              window.location.href = './app.html';
             } else {
+              console.log('❌ 認証失敗 - data.success or data.tokens が false');
               showMessage(data.message || '認証に失敗しました', 'error');
+              isVerifying = false;
             }
           } else {
-            const errorData = JSON.parse(xhr.responseText);
-            showMessage(errorData.message || '認証エラーが発生しました', 'error');
+            console.log('❌ HTTPエラー:', xhr.status);
+            console.log('❌ エラーレスポンス生テキスト:', xhr.responseText);
+            try {
+              const errorData = JSON.parse(xhr.responseText);
+              console.log('❌ パース済みエラー:', errorData);
+              showMessage(errorData.message || `HTTP ${xhr.status}: 認証エラーが発生しました`, 'error');
+            } catch (parseError) {
+              console.log('❌ JSONパースエラー:', parseError);
+              showMessage(`HTTP ${xhr.status}: サーバーエラー`, 'error');
+            }
+            isVerifying = false;
           }
         };
         
         xhr.onerror = function() {
+          console.log('❌ ネットワークエラー');
           showMessage('ネットワークエラーが発生しました', 'error');
+          isVerifying = false;
         };
         
         xhr.send(JSON.stringify({ 
@@ -336,6 +363,7 @@
       } catch (error) {
         console.error('Verify error:', error);
         showMessage('認証エラーが発生しました', 'error');
+        isVerifying = false;
       }
     }
 
