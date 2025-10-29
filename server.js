@@ -82,12 +82,22 @@ app.set('trust proxy', true);
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// 基本的なレート制限（デバッグ用に緩和）
+// 基本的なレート制限（セキュアに設定）
 const basicLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15分
-  max: 1000, // 1000リクエスト（デバッグ用に増加）
+  max: 100, // 適切な制限値に戻す
   message: { error: 'RATE_LIMITED', message: 'リクエストが多すぎます' },
-  trustProxy: 1 // Railway プロキシを信頼（1つのプロキシのみ）
+  trustProxy: 1, // Railway プロキシを信頼（1つのプロキシのみ）
+  standardHeaders: true, // レート制限情報をヘッダーに含める
+  legacyHeaders: false, // X-RateLimit-* ヘッダーを無効化
+  // 個別IPを正確に取得するキーを設定
+  keyGenerator: (req) => {
+    return req.headers['x-forwarded-for']?.split(',')[0] || 
+           req.headers['x-real-ip'] || 
+           req.connection.remoteAddress || 
+           req.socket.remoteAddress ||
+           'unknown';
+  }
 });
 
 app.use(basicLimiter);
@@ -207,6 +217,9 @@ app.post('/api/auth/request-code', async (req, res) => {
   }
 });
 
+// 認証リクエスト追跡（重複防止）
+const activeAuthRequests = new Map();
+
 // 認証コード検証とログイン
 app.post('/api/auth/verify-code', async (req, res) => {
   try {
@@ -215,6 +228,20 @@ app.post('/api/auth/verify-code', async (req, res) => {
     console.log('[debug] Content-Type:', req.headers['content-type']);
     
     const { email, code } = req.body;
+    const requestKey = `${email}:${code}`;
+    
+    // 重複リクエストをチェック
+    if (activeAuthRequests.has(requestKey)) {
+      console.log('[debug] 重複リクエスト検出 - ブロック');
+      return res.status(429).json({
+        error: 'DUPLICATE_REQUEST',
+        message: '認証リクエストが重複しています'
+      });
+    }
+    
+    // リクエストを追跡
+    activeAuthRequests.set(requestKey, Date.now());
+    console.log('[debug] 認証リクエスト追跡開始:', requestKey);
     const clientIp = req.headers['x-forwarded-for']?.split(',')[0] || 
                     req.headers['x-real-ip'] || 
                     req.connection.remoteAddress;
@@ -230,9 +257,20 @@ app.post('/api/auth/verify-code', async (req, res) => {
       });
     }
 
-    const result = await auth.verifyCodeAndLogin(email, code, clientIp, userAgent);
-    
-    res.json(result);
+    try {
+      const result = await auth.verifyCodeAndLogin(email, code, clientIp, userAgent);
+      
+      // 成功時にリクエスト追跡を削除
+      activeAuthRequests.delete(requestKey);
+      console.log('[debug] 認証成功 - 追跡削除:', requestKey);
+      
+      res.json(result);
+    } catch (authError) {
+      // 失敗時もリクエスト追跡を削除
+      activeAuthRequests.delete(requestKey);
+      console.log('[debug] 認証失敗 - 追跡削除:', requestKey);
+      throw authError;
+    }
   } catch (error) {
     console.error('[api] Auth verification error:', error);
     console.error('[api] Error message:', error.message);
