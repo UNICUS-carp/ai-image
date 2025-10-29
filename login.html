@@ -177,7 +177,7 @@
         <label for="authCode">認証コード</label>
         <input type="text" id="authCode" placeholder="6桁の認証コード" maxlength="6" required>
       </div>
-      <button class="btn" onclick="verifyCode()">ログイン</button>
+      <button class="btn" onclick="verifyCode()" id="loginBtn">ログイン</button>
       <button class="btn" style="background: #6c757d; margin-top: 10px;" onclick="goBackToEmail()">戻る</button>
     </div>
     
@@ -312,16 +312,19 @@
             console.log('パース後データ:', data);
             
             if (data.success && data.tokens) {
+              // 重複送信を即座に防ぐ
+              isVerifying = true;
+              
               // トークンを保存
               localStorage.setItem('access_token', data.tokens.accessToken);
               localStorage.setItem('refresh_token', data.tokens.refreshToken);
               
-              console.log('✅ 認証成功！app.htmlに遷移します');
-              console.log('保存されたトークン:', data.tokens.accessToken.substring(0, 20) + '...');
+              console.log('✅ 認証成功！即座にリダイレクト');
               
-              // 即座にapp.htmlに遷移
-              console.log('🔄 app.htmlに遷移中...');
-              window.location.href = './app.html';
+              // 安全にリダイレクト
+              setTimeout(() => {
+                window.location.href = './app.html';
+              }, 50);
             } else {
               console.log('❌ 認証失敗 - data.success or data.tokens が false');
               showMessage(data.message || '認証に失敗しました', 'error');
