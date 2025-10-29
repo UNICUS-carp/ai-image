@@ -356,20 +356,16 @@
     function checkAuth() {
       const token = localStorage.getItem('access_token');
       
-      // デバッグ用：絶対にリダイレクトしない
-      console.log('🔍 checkAuth実行中...');
-      console.log('🔑 取得したトークン:', token ? `存在 (${token.substring(0, 30)}...)` : 'null/undefined');
+      console.log('🔍 認証チェック実行中...');
+      console.log('🔑 トークン状況:', token ? '存在' : '未保存');
       
-      // トークンがない場合でも一旦リダイレクトしない
       if (!token) {
-        console.log('❌ 認証トークンなし');
-        alert('❌ 認証トークンが保存されていません！\n\nOKを押すとlogin.htmlに戻ります。');
+        console.log('❌ 認証トークンなし - login.htmlにリダイレクト');
         window.location.href = './login.html';
         return false;
       }
       
       console.log('✅ 認証トークン確認済み');
-      alert('✅ トークンが確認できました！\n\n次はサーバー認証を確認します。');
       return true;
     }
 
@@ -541,26 +537,7 @@
 
     // 初期化
     document.addEventListener('DOMContentLoaded', function() {
-      console.log('🎯 app.html読み込み開始');
-      
-      // デバッグ用：強制停止
-      const token = localStorage.getItem('access_token');
-      console.log('🔑 localStorage確認:', {
-        access_token: token ? `存在 (${token.substring(0, 20)}...)` : '未保存',
-        refresh_token: localStorage.getItem('refresh_token') ? '存在' : '未保存',
-        length: token ? token.length : 0
-      });
-      
-      // 長時間停止してじっくりデバッグ
-      if (confirm('🔍 デバッグモード: F12でコンソールを確認してください。\n\n準備ができたらOKを押して認証チェックを実行します。\n\nキャンセルを押すと30秒待機します。')) {
-        // OK押下：認証チェック実行
-      } else {
-        // キャンセル押下：30秒待機
-        setTimeout(() => {
-          alert('30秒経過しました。今度は認証チェックを実行します。');
-        }, 30000);
-        return;
-      }
+      console.log('🎯 app.html読み込み開始（同一ドメインモード）');
       
       // 最初に認証チェック
       if (!checkAuth()) {
