@@ -675,7 +675,7 @@ app.post('/api/generate', requireAuth, checkUsageLimits, async (req, res) => {
     const result = await imageGen.generateImages(content, {
       taste: taste,
       aspectRatio: aspectRatio,
-      maxImages: 3
+      maxImages: 5
     });
 
     if (!result.success) {
