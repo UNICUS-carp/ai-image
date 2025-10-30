@@ -1,12 +1,13 @@
 import express from 'express';
 import cors from 'cors';
 import rateLimit from 'express-rate-limit';
+import helmet from 'helmet';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import SecureDatabase from './database.js';
 import EmailAuthenticator from './auth.js';
 import ConfigManager from './config.js';
-import ImageGenerator from './imageGenerator.js';
+import ImageGeneratorV2 from './imageGenerator_v2.js';
 
 // ES Modules用のdirname設定
 const __filename = fileURLToPath(import.meta.url);
@@ -24,10 +25,99 @@ if (!validation.valid) {
   process.exit(1);
 }
 
+// ユーザー権限管理
+class UserPermissionManager {
+  constructor(configManager) {
+    this.config = configManager;
+    // 環境変数のメールアドレスを正規化（小文字・トリム）
+    this.adminEmails = configManager.getArray('ADMIN_EMAILS', [])
+      .map(email => email.toLowerCase().trim())
+      .filter(email => email.length > 0);
+    this.paidUserEmails = configManager.getArray('PAID_USER_EMAILS', [])
+      .map(email => email.toLowerCase().trim())
+      .filter(email => email.length > 0);
+    
+    console.log(`[auth] Loaded ${this.adminEmails.length} admin users`);
+    console.log(`[auth] Loaded ${this.paidUserEmails.length} paid users`);
+    
+    // セキュリティ: 重複チェック
+    const duplicates = this.adminEmails.filter(email => this.paidUserEmails.includes(email));
+    if (duplicates.length > 0) {
+      console.warn(`[auth] WARNING: Duplicate emails in admin and paid lists: ${duplicates.join(', ')}`);
+    }
+  }
+
+  // ユーザーの権限レベルを判定
+  getUserRole(email) {
+    const normalizedEmail = email.toLowerCase().trim();
+    
+    if (this.adminEmails.includes(normalizedEmail)) {
+      return 'admin';
+    }
+    
+    if (this.paidUserEmails.includes(normalizedEmail)) {
+      return 'paid';
+    }
+    
+    return 'free';
+  }
+
+  // 開発者権限チェック（管理者として扱う）
+  isDeveloper(email, userRole = null) {
+    const role = userRole || this.getUserRole(email);
+    return role === 'admin';
+  }
+
+  // 有料ユーザー権限チェック
+  isPaidUser(email, userRole = null) {
+    const role = userRole || this.getUserRole(email);
+    return role === 'paid' || role === 'admin';
+  }
+
+  // 使用制限の取得
+  getUsageLimits(email, userRole = null) {
+    const role = userRole || this.getUserRole(email);
+    
+    switch (role) {
+      case 'admin':
+        return {
+          articles: -1,        // 無制限
+          regenerations: -1    // 無制限
+        };
+      case 'paid':
+        return {
+          articles: 5,         // 1日5回
+          regenerations: 50    // 1日50回
+        };
+      case 'free':
+      default:
+        return {
+          articles: 0,         // 無料ユーザーは使用不可
+          regenerations: 0     // 無料ユーザーは使用不可
+        };
+    }
+  }
+
+  // 権限情報の表示用
+  getPermissionInfo(email) {
+    const role = this.getUserRole(email);
+    const limits = this.getUsageLimits(email, role);
+    
+    return {
+      email,
+      role,
+      limits,
+      isDeveloper: this.isDeveloper(email, role),
+      isPaidUser: this.isPaidUser(email, role)
+    };
+  }
+}
+
 // データベース、Auth、画像生成初期化
 const db = new SecureDatabase();
 const auth = new EmailAuthenticator(db);
-const imageGen = new ImageGenerator();
+const imageGen = new ImageGeneratorV2();
+const permissions = new UserPermissionManager(config);
 
 // ========================================
 // ミドルウェア設定
@@ -38,7 +128,43 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS
   ? process.env.ALLOWED_ORIGINS.split(',').map(origin => origin.trim())
   : ['https://unicus.top'];
 
-// 一時的に全てのOriginを許可（問題解決後に制限）
+// Helmet.js セキュリティヘッダー（安全な部分のみ）
+app.use(helmet({
+  // CSPは無効化（既存機能保護）
+  contentSecurityPolicy: false,
+  
+  // 安全なセキュリティヘッダーのみ有効
+  crossOriginResourcePolicy: { policy: "cross-origin" },
+  crossOriginOpenerPolicy: { policy: "same-origin-allow-popups" },
+  crossOriginEmbedderPolicy: false, // 互換性のため無効
+  
+  // クリックジャッキング防止
+  frameguard: { action: 'deny' },
+  
+  // MIMEタイプスニッフィング防止
+  noSniff: true,
+  
+  // DNS先読み制御
+  dnsPrefetchControl: { allow: false },
+  
+  // リファラーポリシー
+  referrerPolicy: { policy: "same-origin" },
+  
+  // HSTS（本番環境のみ）
+  hsts: process.env.NODE_ENV === 'production' ? {
+    maxAge: 31536000,
+    includeSubDomains: true,
+    preload: true
+  } : false,
+  
+  // Origin Agent Cluster
+  originAgentCluster: true,
+  
+  // X-Permitted-Cross-Domain-Policies
+  permittedCrossDomainPolicies: { permittedPolicies: "none" }
+}));
+
+// CORS設定
 app.use(cors({
   origin: true, // 全てのoriginを許可
   credentials: true,
@@ -47,21 +173,14 @@ app.use(cors({
   optionsSuccessStatus: 200
 }));
 
-// セキュリティヘッダー + 追加CORS設定
+// 追加のCORSヘッダー設定（既存機能保持）
 app.use((req, res, next) => {
-  res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('X-Frame-Options', 'DENY');
-  res.setHeader('X-XSS-Protection', '1; mode=block');
-  
   // 追加のCORSヘッダー（念のため）
   res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Session-ID');
   res.setHeader('Access-Control-Allow-Credentials', 'true');
   
-  if (process.env.NODE_ENV === 'production') {
-    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
-  }
   next();
 });
 
@@ -157,19 +276,31 @@ async function requireAuth(req, res, next) {
     req.user = verification.user;
     req.tokenData = verification.decoded;
     
-    // 支払い状況チェック（開発者以外）
-    // 特定のメールアドレスは開発者として扱う
-    const isDeveloper = req.user.role === 'developer' || req.user.email === 'free_dial0120@yahoo.co.jp';
+    // 新しい権限システムを使用
+    const userRole = permissions.getUserRole(req.user.email);
+    const userPermissions = permissions.getPermissionInfo(req.user.email);
     
-    if (!isDeveloper) {
-      const paymentStatus = await db.checkPaymentStatus(req.user.email);
-      if (paymentStatus !== 'paid') {
-        return res.status(403).json({
-          error: 'PAYMENT_REQUIRED',
-          message: 'サービスの利用には有効な決済が必要です',
-          paymentStatus: paymentStatus || 'pending'
-        });
-      }
+    // リクエストに権限情報を追加
+    req.userRole = userRole;
+    req.userPermissions = userPermissions;
+    
+    // 無料ユーザーのアクセス制限（管理者と有料ユーザー以外）
+    if (!permissions.isPaidUser(req.user.email, userRole)) {
+      return res.status(403).json({
+        error: 'SUBSCRIPTION_REQUIRED',
+        message: 'このサービスの利用には有料プランへの登録が必要です',
+        userRole: userRole,
+        upgradeInfo: {
+          current: 'free',
+          required: 'paid',
+          benefits: [
+            '1日5回の画像生成',
+            '1日50回の再生成', 
+            'OpenAI GPT-4o-mini分析機能',
+            '高品質なアイキャッチ画像'
+          ]
+        }
+      });
     }
     
     next();
@@ -356,11 +487,16 @@ app.post('/api/auth/logout', requireAuth, async (req, res) => {
 async function checkUsageLimits(req, res, next) {
   try {
     const userId = req.user.id;
-    const userRole = req.user.role;
+    const userEmail = req.user.email;
+    const userRole = req.userRole;
 
-    // 開発者は制限なし
-    const isDeveloper = userRole === 'developer' || req.user.email === 'free_dial0120@yahoo.co.jp';
-    if (isDeveloper) {
+    // 権限から使用制限を取得
+    const limits = permissions.getUsageLimits(userEmail, userRole);
+    
+    // 管理者（開発者）は制限なし
+    if (permissions.isDeveloper(userEmail, userRole)) {
+      req.usage = { articleCount: 0, regenerationCount: 0 };
+      req.limits = limits;
       return next();
     }
 
@@ -368,23 +504,23 @@ async function checkUsageLimits(req, res, next) {
     const articleCount = usage?.article_count || 0;
     const regenerationCount = usage?.regeneration_count || 0;
 
-    // 制限チェック
-    const DAILY_LIMITS = {
-      articles: 5,
-      regenerations: 50
-    };
-
-    if (articleCount >= DAILY_LIMITS.articles) {
+    // 制限チェック（有料ユーザー用）
+    if (limits.articles !== -1 && articleCount >= limits.articles) {
       return res.status(403).json({
         error: "DAILY_LIMIT_EXCEEDED",
-        message: "本日の記事処理数が上限に達しました",
+        message: `本日の記事処理数が上限に達しました（${limits.articles}回/日）`,
         usage: { articleCount, regenerationCount },
-        limits: DAILY_LIMITS
+        limits: limits,
+        userRole: userRole,
+        upgradeInfo: userRole === 'paid' ? null : {
+          message: '制限を解除するには有料プランにアップグレードしてください',
+          benefits: ['1日5回の画像生成', '1日50回の再生成']
+        }
       });
     }
 
     req.usage = { articleCount, regenerationCount };
-    req.limits = DAILY_LIMITS;
+    req.limits = limits;
     next();
   } catch (error) {
     console.error('[middleware] Usage limit check error:', error);
@@ -402,13 +538,11 @@ async function checkUsageLimits(req, res, next) {
 app.get('/api/usage/stats', requireAuth, async (req, res) => {
   try {
     const userId = req.user.id;
+    const userEmail = req.user.email;
     const usage = await db.getTodayUsage(userId);
     
-    const isDeveloper = req.user.role === 'developer' || req.user.email === 'free_dial0120@yahoo.co.jp';
-    const limits = {
-      articles: isDeveloper ? -1 : 5,
-      regenerations: isDeveloper ? -1 : 50
-    };
+    // 新しい権限システムを使用
+    const userPermissions = permissions.getPermissionInfo(userEmail);
 
     res.json({
       success: true,
@@ -416,7 +550,13 @@ app.get('/api/usage/stats', requireAuth, async (req, res) => {
         articleCount: usage?.article_count || 0,
         regenerationCount: usage?.regeneration_count || 0
       },
-      limits
+      limits: userPermissions.limits,
+      user: {
+        email: userEmail,
+        role: userPermissions.role,
+        isDeveloper: userPermissions.isDeveloper,
+        isPaidUser: userPermissions.isPaidUser
+      }
     });
   } catch (error) {
     console.error('[api] Usage stats error:', error);
@@ -518,7 +658,7 @@ app.post('/api/demo/generate', async (req, res) => {
 
 app.post('/api/generate', requireAuth, checkUsageLimits, async (req, res) => {
   try {
-    const { content, provider = 'google', taste = 'modern', aspectRatio = '1:1' } = req.body;
+    const { content, provider = 'google', taste = 'photo', aspectRatio = '1:1' } = req.body;
     
     if (!content || content.trim().length === 0) {
       return res.status(400).json({
@@ -564,6 +704,57 @@ app.post('/api/generate', requireAuth, checkUsageLimits, async (req, res) => {
     res.status(500).json({
       error: 'GENERATION_FAILED',
       message: '画像生成に失敗しました'
+    });
+  }
+});
+
+// ========================================
+// 画像再生成API（認証必要）
+// ========================================
+
+app.post('/api/regenerate', requireAuth, async (req, res) => {
+  try {
+    const { originalPrompt, instructions, style = 'photo', aspectRatio = '1:1' } = req.body;
+    
+    if (!originalPrompt || !instructions) {
+      return res.status(400).json({
+        error: 'INVALID_REQUEST',
+        message: '元のプロンプトと修正指示が必要です'
+      });
+    }
+
+    if (instructions.trim().length === 0) {
+      return res.status(400).json({
+        error: 'INVALID_REQUEST',
+        message: '修正指示を入力してください'
+      });
+    }
+
+    // 再生成処理
+    console.log(`[api] Regenerating image for user ${req.user.id}...`);
+    const result = await imageGen.regenerateSingleImage(originalPrompt, instructions, {
+      taste: style,
+      aspectRatio: aspectRatio
+    });
+
+    if (!result.success) {
+      return res.status(500).json({
+        error: 'REGENERATION_FAILED',
+        message: result.message || '画像の修正に失敗しました',
+        details: result.error
+      });
+    }
+    
+    res.json({
+      success: true,
+      message: result.message,
+      image: result.image
+    });
+  } catch (error) {
+    console.error('[api] Image regeneration error:', error);
+    res.status(500).json({
+      error: 'REGENERATION_FAILED',
+      message: '画像の修正に失敗しました'
     });
   }
 });
