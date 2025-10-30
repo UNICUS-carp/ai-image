@@ -602,7 +602,7 @@
               <button class="download-btn" onclick="downloadImage('${image.title || `画像_${index + 1}`}', '${image.dataUrl}')" style="flex: 1;">
                 💾 ダウンロード
               </button>
-              <button class="regenerate-btn" onclick="autoRegenerateImage(${index})" style="flex: 1;">
+              <button class="regenerate-btn" onclick="showRegenerateOptions(${index})" style="flex: 1;">
                 🔄 修正
               </button>
             </div>
@@ -619,7 +619,18 @@
     function downloadImage(title, dataUrl) {
       const a = document.createElement('a');
       a.href = dataUrl;
-      a.download = `illustauto_${title}.png`;
+      
+      // dataUrlの形式に応じて適切な拡張子を設定
+      let extension = '.png';
+      if (dataUrl.startsWith('data:image/svg+xml')) {
+        extension = '.svg';
+      } else if (dataUrl.startsWith('data:image/jpeg')) {
+        extension = '.jpg';
+      } else if (dataUrl.startsWith('data:image/webp')) {
+        extension = '.webp';
+      }
+      
+      a.download = `illustauto_${title}${extension}`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -628,8 +639,60 @@
     // 画像再生成関連
     let originalImages = [];
 
+    // 再生成オプションの表示
+    function showRegenerateOptions(imageIndex) {
+      if (imageIndex < 0 || !originalImages[imageIndex]) {
+        showMessage('修正対象の画像が見つかりません', 'error');
+        return;
+      }
+
+      // スタイル選択
+      const styleOptions = [
+        { value: 'photo', label: '📸 写真 (Photo)' },
+        { value: 'deformed', label: '🎌 デフォルメ (Deformed)' },
+        { value: 'watercolor', label: '🎨 手書き（水彩）(Watercolor)' },
+        { value: 'detailed', label: '🔍 精密 (Detailed)' },
+        { value: 'pictogram', label: '📊 ピクトグラム (Pictogram)' }
+      ];
+
+      const currentStyle = document.getElementById('style').value;
+      const currentAspectRatio = document.getElementById('aspectRatio').value;
+
+      const styleChoices = styleOptions.map(opt => 
+        `${opt.value === currentStyle ? '✅' : '⬜'} ${opt.label}`
+      ).join('\n');
+
+      const selectedStyle = prompt(
+        `画像のスタイルを選択してください (現在: ${currentStyle}):\n\n${styleChoices}\n\n希望するスタイルを入力してください (photo, deformed, watercolor, detailed, pictogram):`,
+        currentStyle
+      );
+
+      if (!selectedStyle) return; // キャンセル
+
+      // アスペクト比選択
+      const aspectRatios = [
+        { value: '16:9', label: '🖥️ 横長 (16:9)' },
+        { value: '1:1', label: '⬜ 正方形 (1:1)' },
+        { value: '9:16', label: '📱 縦長 (9:16)' }
+      ];
+
+      const ratioChoices = aspectRatios.map(opt => 
+        `${opt.value === currentAspectRatio ? '✅' : '⬜'} ${opt.label}`
+      ).join('\n');
+
+      const selectedRatio = prompt(
+        `画像のアスペクト比を選択してください (現在: ${currentAspectRatio}):\n\n${ratioChoices}\n\n希望する比率を入力してください (16:9, 1:1, 9:16):`,
+        currentAspectRatio
+      );
+
+      if (!selectedRatio) return; // キャンセル
+
+      // 再生成実行
+      autoRegenerateImage(imageIndex, selectedStyle, selectedRatio);
+    }
+
     // 自動的にプロンプトを少し修正して再生成
-    async function autoRegenerateImage(imageIndex) {
+    async function autoRegenerateImage(imageIndex, customStyle = null, customAspectRatio = null) {
       if (imageIndex < 0 || !originalImages[imageIndex]) {
         showMessage('修正対象の画像が見つかりません', 'error');
         return;
@@ -689,12 +752,12 @@
           showMessage('ネットワークエラーが発生しました', 'error');
         };
 
-        // 現在の画像サイズとテイストを使用（変更可能）
+        // ユーザー選択またはフォームの値を使用
         xhr.send(JSON.stringify({
           originalPrompt: originalImage.prompt,
           instructions: autoInstructions,
-          style: document.getElementById('style').value,
-          aspectRatio: document.getElementById('aspectRatio').value
+          style: customStyle || document.getElementById('style').value,
+          aspectRatio: customAspectRatio || document.getElementById('aspectRatio').value
         }));
 
       } catch (error) {
