@@ -379,11 +379,11 @@
         <div class="form-group">
           <label for="style">画像スタイル</label>
           <select id="style">
-            <option value="photo">📸 写真 (Photo)</option>
-            <option value="deformed">🎌 デフォルメ (Deformed)</option>
-            <option value="watercolor">🎨 手書き（水彩）(Watercolor)</option>
-            <option value="detailed">🔍 精密 (Detailed)</option>
-            <option value="pictogram">📊 ピクトグラム (Pictogram)</option>
+            <option value="photo">写真画質</option>
+            <option value="deformed">デフォルメアニメ</option>
+            <option value="watercolor">手書き水彩画</option>
+            <option value="detailed">精密イラスト</option>
+            <option value="pictogram">ピクトグラム</option>
           </select>
         </div>
         
@@ -645,56 +645,97 @@
     // 画像再生成関連
     let originalImages = [];
 
-    // 再生成オプションの表示
+    // 再生成オプションの表示（インライン表示）
     function showRegenerateOptions(imageIndex) {
       if (imageIndex < 0 || !originalImages[imageIndex]) {
         showMessage('修正対象の画像が見つかりません', 'error');
         return;
       }
 
-      // スタイル選択
-      const styleOptions = [
-        { value: 'photo', label: '📸 写真 (Photo)' },
-        { value: 'deformed', label: '🎌 デフォルメ (Deformed)' },
-        { value: 'watercolor', label: '🎨 手書き（水彩）(Watercolor)' },
-        { value: 'detailed', label: '🔍 精密 (Detailed)' },
-        { value: 'pictogram', label: '📊 ピクトグラム (Pictogram)' }
-      ];
+      // 既存の修正UIを削除
+      const existingUI = document.querySelector('.regenerate-options-ui');
+      if (existingUI) {
+        existingUI.remove();
+      }
+
+      // 画像カードを特定
+      const imageCards = document.querySelectorAll('.image-container');
+      const imageCard = imageCards[imageIndex];
+      if (!imageCard) {
+        showMessage('画像要素が見つかりません', 'error');
+        return;
+      }
 
       const currentStyle = document.getElementById('style').value;
       const currentAspectRatio = document.getElementById('aspectRatio').value;
 
-      const styleChoices = styleOptions.map(opt => 
-        `${opt.value === currentStyle ? '✅' : '⬜'} ${opt.label}`
-      ).join('\n');
+      // インライン修正UIを作成
+      const regenerateUI = document.createElement('div');
+      regenerateUI.className = 'regenerate-options-ui';
+      regenerateUI.innerHTML = `
+        <div style="background: #f8f9fa; border: 1px solid #ddd; border-radius: 8px; padding: 15px; margin-top: 10px;">
+          <h4 style="margin: 0 0 10px 0; color: #333;">画像修正オプション</h4>
+          
+          <div style="display: flex; gap: 15px; margin-bottom: 15px;">
+            <div style="flex: 1;">
+              <label style="display: block; margin-bottom: 5px; font-weight: bold;">テイスト:</label>
+              <select id="regenerate-style-${imageIndex}" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;">
+                <option value="photo" ${currentStyle === 'photo' ? 'selected' : ''}>写真画質</option>
+                <option value="deformed" ${currentStyle === 'deformed' ? 'selected' : ''}>デフォルメアニメ</option>
+                <option value="watercolor" ${currentStyle === 'watercolor' ? 'selected' : ''}>手書き水彩画</option>
+                <option value="detailed" ${currentStyle === 'detailed' ? 'selected' : ''}>精密イラスト</option>
+                <option value="pictogram" ${currentStyle === 'pictogram' ? 'selected' : ''}>ピクトグラム</option>
+              </select>
+            </div>
+            
+            <div style="flex: 1;">
+              <label style="display: block; margin-bottom: 5px; font-weight: bold;">サイズ:</label>
+              <select id="regenerate-ratio-${imageIndex}" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;">
+                <option value="16:9" ${currentAspectRatio === '16:9' ? 'selected' : ''}>横長 (16:9)</option>
+                <option value="1:1" ${currentAspectRatio === '1:1' ? 'selected' : ''}>正方形 (1:1)</option>
+                <option value="9:16" ${currentAspectRatio === '9:16' ? 'selected' : ''}>縦長 (9:16)</option>
+              </select>
+            </div>
+          </div>
+          
+          <div style="display: flex; gap: 10px;">
+            <button onclick="executeRegeneration(${imageIndex})" style="flex: 1; padding: 10px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer;">
+              🔄 修正実行
+            </button>
+            <button onclick="cancelRegeneration()" style="flex: 1; padding: 10px; background: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer;">
+              ✖️ キャンセル
+            </button>
+          </div>
+        </div>
+      `;
 
-      const selectedStyle = prompt(
-        `画像のスタイルを選択してください (現在: ${currentStyle}):\n\n${styleChoices}\n\n希望するスタイルを入力してください (photo, deformed, watercolor, detailed, pictogram):`,
-        currentStyle
-      );
+      imageCard.appendChild(regenerateUI);
+    }
 
-      if (!selectedStyle) return; // キャンセル
-
-      // アスペクト比選択
-      const aspectRatios = [
-        { value: '16:9', label: '🖥️ 横長 (16:9)' },
-        { value: '1:1', label: '⬜ 正方形 (1:1)' },
-        { value: '9:16', label: '📱 縦長 (9:16)' }
-      ];
-
-      const ratioChoices = aspectRatios.map(opt => 
-        `${opt.value === currentAspectRatio ? '✅' : '⬜'} ${opt.label}`
-      ).join('\n');
-
-      const selectedRatio = prompt(
-        `画像のアスペクト比を選択してください (現在: ${currentAspectRatio}):\n\n${ratioChoices}\n\n希望する比率を入力してください (16:9, 1:1, 9:16):`,
-        currentAspectRatio
-      );
-
-      if (!selectedRatio) return; // キャンセル
-
+    function executeRegeneration(imageIndex) {
+      const styleSelect = document.getElementById(`regenerate-style-${imageIndex}`);
+      const ratioSelect = document.getElementById(`regenerate-ratio-${imageIndex}`);
+      
+      if (!styleSelect || !ratioSelect) {
+        showMessage('修正オプションが見つかりません', 'error');
+        return;
+      }
+      
+      const selectedStyle = styleSelect.value;
+      const selectedRatio = ratioSelect.value;
+      
+      // UIを削除
+      cancelRegeneration();
+      
       // 再生成実行
       autoRegenerateImage(imageIndex, selectedStyle, selectedRatio);
+    }
+
+    function cancelRegeneration() {
+      const existingUI = document.querySelector('.regenerate-options-ui');
+      if (existingUI) {
+        existingUI.remove();
+      }
     }
 
     // 自動的にプロンプトを少し修正して再生成

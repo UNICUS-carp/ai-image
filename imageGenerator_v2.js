@@ -276,25 +276,16 @@ ${content}
       const headingText = chunk.heading ? `\nHeading: "${chunk.heading}"` : '';
       const scope = chunk.heading || '記事内容';
 
-      const systemPrompt = `
-Create a detailed image generation prompt for AI image creation based on this content.
-
-Requirements:
-- Visual style: ${styleGuides[style] || styleGuides.modern}
-- No text or words in the image
-- Professional, blog-appropriate illustration
-- Aspect ratio: ${aspectRatio}
-- Diversity: Image ${chunk.index + 1} of multiple images (ensure unique composition)
-
-Content scope: ${scope}${headingText}
-
-Text content: "${chunk.text}"
-
-Generate a concise visual prompt (under 150 characters):`;
+      const systemPrompt = `Create a very short image prompt (maximum 50 characters) for: ${scope}. Style: ${styleGuides[style] || styleGuides.modern}. No text in image.`;
 
       const result = await this.geminiModel.generateContent(systemPrompt);
       const geminiResponse = result.response;
-      const imagePrompt = geminiResponse.text().trim();
+      let imagePrompt = geminiResponse.text().trim();
+      
+      // 50文字制限を強制
+      if (imagePrompt.length > 50) {
+        imagePrompt = imagePrompt.substring(0, 50);
+      }
       
       console.log(`[imageGen] Generated prompt for chunk ${chunk.index} "${chunk.heading || 'no heading'}":`, imagePrompt);
       return imagePrompt;
