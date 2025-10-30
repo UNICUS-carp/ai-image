@@ -17,12 +17,6 @@ class ImageGeneratorV2 {
       console.log('[imageGen] Gemini 2.5 Flash initialized');
     }
 
-    if (this.openaiApiKey) {
-      console.log('[imageGen] OpenAI GPT-4o-mini available for enhanced semantic splitting');
-    } else {
-      console.log('[imageGen] OpenAI API not available, using deterministic splitting only');
-    }
-
     // Style mappings based on original TypeScript implementation
     this.styleMap = {
       'photo': '写真風、リアリスティック、高品質な写真のような',
@@ -292,36 +286,14 @@ class ImageGeneratorV2 {
     return chunks.slice(0, options.maxChunks);
   }
 
-  async splitArticle(body, maxImages) {
+  splitArticle(body, maxImages) {
     const headings = this.detectHeadings(body);
     if (headings.length > 0) {
-      // 見出しがある場合：OpenAI GPTで見出しベース分析
-      if (this.openaiApiKey) {
-        try {
-          return await this.splitContentWithOpenAI(body, true, headings.map(h => h.heading), maxImages);
-        } catch (error) {
-          console.warn('[imageGen] OpenAI splitting failed, falling back to local merge:', error.message);
-          return this.mergeSimilarHeadings(headings, Math.min(maxImages, 5));
-        }
-      }
       return this.mergeSimilarHeadings(headings, Math.min(maxImages, 5));
     }
 
     if (body.length < 200) {
       return [{ index: 0, body: body.trim() }];
-    }
-
-    // 見出しがない場合：OpenAI GPTでセマンティック分析
-    if (this.openaiApiKey) {
-      try {
-        return await this.splitContentWithOpenAI(body, false, [], maxImages);
-      } catch (error) {
-        console.warn('[imageGen] OpenAI splitting failed, falling back to deterministic split:', error.message);
-        return this.semanticSplit(body, {
-          maxChunks: Math.min(maxImages, 5),
-          maxCharsPerChunk: 400,
-        });
-      }
     }
 
     return this.semanticSplit(body, {
@@ -353,7 +325,7 @@ class ImageGeneratorV2 {
       ? `歴史的時代設定: ${regionInfo.historical.era}時代`
       : regionInfo.era;
 
-    // 簡潔な画像生成用プロンプト（記事本文とガイドライン除外）
+    // 簡潔なプロンプト（SAFETY_GUIDELINESとbody削除）
     return [
       `${scope}をテーマにしたアイキャッチ用イラストを生成`,
       `スタイル: ${styleText}`,
@@ -441,139 +413,12 @@ class ImageGeneratorV2 {
   }
 
   // ============================================
-  // OpenAI GPT-4o-mini Enhanced Semantic Splitting
-  // ============================================
-
-  async splitContentWithOpenAI(content, hasHeadings, headings, maxImages = 5) {
-    console.log("[imageGen] Using OpenAI GPT-4o-mini for content analysis");
-    
-    let systemPrompt, userPrompt;
-    
-    if (hasHeadings && headings.length > 0) {
-      systemPrompt = `あなたは日本語の記事を分析し、画像生成に適した重要で視覚的な場面を抽出する専門家です。
-記事から各見出しに対応する本文の中で、最も視覚的に表現しやすく、記事の価値を伝える重要な場面を抽出してください。
-
-抽出の優先順位：
-1. 記事の主要テーマに直結する重要な場面
-2. 具体的な動作・行動・状況の描写
-3. 感情的・雰囲気的な表現が豊富な箇所
-4. 読者にとって理解しやすい具体例
-
-最大${maxImages}個の場面を抽出し、各場面について以下のJSON形式で出力してください：
-{
-  "chunks": [
-    {
-      "index": 0,
-      "heading": "見出し名（元の見出しを使用）",
-      "body": "抽出した本文（200-400文字程度）",
-      "visualDescription": "この場面の視覚的特徴"
-    }
-  ]
-}`;
-
-      userPrompt = `記事の見出し一覧：
-${headings.map((h, i) => `${i + 1}. ${h}`).join('\n')}
-
-記事全文：
-${content}
-
-上記の記事から、画像生成に最適な${maxImages}個の重要場面を抽出してください。`;
-    } else {
-      systemPrompt = `あなたは日本語の記事を分析し、画像生成に適した意味的なまとまりに分割する専門家です。
-記事全体から視覚的に表現しやすく、内容的に独立した場面を抽出してください。
-
-分割の基準：
-1. 意味的なまとまり（話題の転換点）
-2. 視覚的に表現可能な具体的な描写
-3. 記事の流れを保った論理的な区切り
-4. 各チャンクが独立して理解できること
-
-最大${maxImages}個のチャンクに分割し、以下のJSON形式で出力してください：
-{
-  "chunks": [
-    {
-      "index": 0,
-      "body": "抽出した本文（200-400文字程度）",
-      "theme": "このチャンクの主要テーマ",
-      "visualDescription": "この場面の視覚的特徴"
-    }
-  ]
-}`;
-
-      userPrompt = `記事全文：
-${content}
-
-上記の記事を、画像生成に最適な${maxImages}個の意味的なまとまりに分割してください。`;
-    }
-
-    const requestBody = {
-      model: "gpt-4o-mini",
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userPrompt }
-      ],
-      temperature: 0.3,
-      max_tokens: 2000
-    };
-
-    console.log("[imageGen] Sending request to OpenAI API...");
-    const startTime = Date.now();
-
-    const response = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${this.openaiApiKey}`
-      },
-      body: JSON.stringify(requestBody)
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`OpenAI API error: ${response.status} - ${errorText}`);
-    }
-
-    const data = await response.json();
-    if (!data.choices || !data.choices[0] || !data.choices[0].message || !data.choices[0].message.content) {
-      throw new Error("No content in OpenAI response");
-    }
-
-    const responseContent = data.choices[0].message.content.trim();
-    const elapsed = Date.now() - startTime;
-    console.log("[imageGen] OpenAI response received:", responseContent.substring(0, 200) + "...");
-
-    let parsedResponse;
-    try {
-      parsedResponse = JSON.parse(responseContent);
-    } catch (parseError) {
-      console.error("[imageGen] Failed to parse OpenAI response as JSON:", parseError);
-      console.error("[imageGen] Raw response:", responseContent);
-      throw new Error("Invalid JSON response from OpenAI");
-    }
-
-    if (!parsedResponse.chunks || !Array.isArray(parsedResponse.chunks)) {
-      throw new Error("Invalid response format from OpenAI");
-    }
-
-    const chunks = parsedResponse.chunks.slice(0, maxImages).map((chunk, index) => ({
-      index: index,
-      heading: chunk.heading || null,
-      body: chunk.body || "",
-      theme: chunk.theme || null,
-      visualDescription: chunk.visualDescription || null
-    }));
-
-    console.log(`[imageGen] ✅ OpenAI analysis completed in ${elapsed}ms, generated ${chunks.length} chunks`);
-    return chunks;
-  }
-
-  // ============================================
   // Enhanced Image Generation
   // ============================================
 
   async generateImages(content, options = {}) {
     try {
-      const { taste = 'photo', aspectRatio = '1:1', maxImages = 5 } = options;
+      const { taste = 'photo', aspectRatio = '1:1', maxImages = 3 } = options;
       
       console.log(`[imageGen] Starting enhanced generation`);
       console.log(`[imageGen] - Style: ${taste} (mapped: ${this.styleMap[taste] || 'unknown'})`);
@@ -581,8 +426,8 @@ ${content}
       console.log(`[imageGen] - Max Images: ${maxImages}`);
       console.log(`[imageGen] - Content length: ${content.length} chars`);
 
-      // Split content using sophisticated chunking (now async with OpenAI)
-      const chunks = await this.splitArticle(content, maxImages);
+      // Split content using sophisticated chunking
+      const chunks = this.splitArticle(content, maxImages);
       console.log(`[imageGen] Split content into ${chunks.length} chunks`);
 
       const images = [];
@@ -760,7 +605,6 @@ ${content}
 
     const color = colorMap[taste] || '#667eea';
     const { width, height } = dimensions[aspectRatio] || dimensions['1:1'];
-    const displayTitle = chunk.heading || chunk.body.substring(0, 40) + (chunk.body.length > 40 ? '...' : '');
 
     const svg = `
       <svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
@@ -771,10 +615,8 @@ ${content}
           </linearGradient>
         </defs>
         <rect width="100%" height="100%" fill="url(#grad${chunk.index})"/>
-        <circle cx="30" cy="30" r="20" fill="rgba(255,255,255,0.4)"/>
-        <text x="50%" y="30%" font-family="Arial, sans-serif" font-size="16" fill="white" text-anchor="middle" dy=".3em">🎨 ${this.styleMap[taste]?.split('、')[0] || taste}</text>
-        <text x="50%" y="45%" font-family="Arial, sans-serif" font-size="14" fill="white" text-anchor="middle" dy=".3em">${displayTitle}</text>
-        <text x="50%" y="70%" font-family="Arial, sans-serif" font-size="11" fill="rgba(255,255,255,0.9)" text-anchor="middle" dy=".3em">Enhanced Chunking: ${chunk.index + 1}</text>
+        <circle cx="50%" cy="50%" r="30" fill="rgba(255,255,255,0.3)"/>
+        <text x="50%" y="50%" font-family="Arial, sans-serif" font-size="24" fill="white" text-anchor="middle" dy=".3em">🎨</text>
       </svg>
     `;
 
