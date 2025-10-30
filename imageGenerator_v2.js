@@ -292,8 +292,8 @@ Text content: "${chunk.text}"
 Generate a concise visual prompt (under 150 characters):`;
 
       const result = await this.geminiModel.generateContent(systemPrompt);
-      const response = result.response;
-      const imagePrompt = response.text().trim();
+      const geminiResponse = result.response;
+      const imagePrompt = geminiResponse.text().trim();
       
       console.log(`[imageGen] Generated prompt for chunk ${chunk.index} "${chunk.heading || 'no heading'}":`, imagePrompt);
       return imagePrompt;
@@ -383,7 +383,7 @@ Generate a concise visual prompt (under 150 characters):`;
       console.log(`[imageGen] API endpoint: ${apiUrl}`);
       console.log(`[imageGen] Request body:`, JSON.stringify(requestBody, null, 2));
 
-      const response = await fetch(apiUrl, {
+      const apiResponse = await fetch(apiUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
@@ -391,13 +391,13 @@ Generate a concise visual prompt (under 150 characters):`;
         body: JSON.stringify(requestBody)
       });
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.warn(`[imageGen] Gemini 2.5 Flash Image API error: ${response.status} - ${errorText}`);
-        throw new Error(`Gemini API error: ${response.status} - ${errorText}`);
+      if (!apiResponse.ok) {
+        const errorText = await apiResponse.text();
+        console.warn(`[imageGen] Gemini 2.5 Flash Image API error: ${apiResponse.status} - ${errorText}`);
+        throw new Error(`Gemini API error: ${apiResponse.status} - ${errorText}`);
       }
 
-      const data = await response.json();
+      const data = await apiResponse.json();
       console.log(`[imageGen] Gemini API response:`, JSON.stringify(data, null, 2));
       
       // v1_backupの正確なレスポンス処理ロジックに従う
@@ -492,8 +492,8 @@ Original prompt: ${prompt}
 Generate an optimized image generation prompt:`;
 
       const result = await this.geminiModel.generateContent(systemPrompt);
-      const response = result.response;
-      const optimizedPrompt = response.text().trim();
+      const geminiResponse = result.response;
+      const optimizedPrompt = geminiResponse.text().trim();
       
       return optimizedPrompt;
     } catch (error) {
