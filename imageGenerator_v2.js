@@ -402,7 +402,7 @@ Generate a concise visual prompt (under 150 characters):`;
       console.log(`[imageGen] Gemini API response:`, JSON.stringify(data, null, 2));
       
       // v1_backupの正確なレスポンス処理ロジックに従う
-      if (data.candidates && data.candidates[0]) {
+      if (data.candidates && data.candidates.length > 0) {
         const candidate = data.candidates[0];
         const parts = candidate.content?.parts;
         
