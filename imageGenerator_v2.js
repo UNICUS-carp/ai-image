@@ -11,7 +11,7 @@ class ImageGeneratorV2 {
       this.mockMode = true;
     } else {
       this.genAI = new GoogleGenerativeAI(this.geminiApiKey);
-      this.geminiModel = this.genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+      this.geminiModel = this.genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
       this.mockMode = false;
       console.log('[imageGen] Gemini API initialized');
     }
@@ -508,7 +508,7 @@ Generate an optimized image generation prompt:`;
     const {
       taste = 'modern',
       aspectRatio = '1:1',
-      maxImages = 3
+      maxImages = 5
     } = options;
 
     try {
@@ -604,10 +604,8 @@ Generate an optimized image generation prompt:`;
           </linearGradient>
         </defs>
         <rect width="100%" height="100%" fill="url(#grad${chunk.index})"/>
-        <circle cx="30" cy="30" r="20" fill="rgba(255,255,255,0.3)"/>
-        <text x="50%" y="35%" font-family="Arial, sans-serif" font-size="14" fill="white" text-anchor="middle" dy=".3em">🎨 ${taste.toUpperCase()}</text>
-        <text x="50%" y="45%" font-family="Arial, sans-serif" font-size="12" fill="white" text-anchor="middle" dy=".3em">${displayTitle}</text>
-        <text x="50%" y="65%" font-family="Arial, sans-serif" font-size="10" fill="rgba(255,255,255,0.8)" text-anchor="middle" dy=".3em">Prompt: ${prompt.substring(0, 50)}...</text>
+        <circle cx="50%" cy="50%" r="30" fill="rgba(255,255,255,0.3)"/>
+        <text x="50%" y="50%" font-family="Arial, sans-serif" font-size="24" fill="white" text-anchor="middle" dy=".3em">🎨</text>
       </svg>
     `;
 
@@ -642,6 +640,79 @@ Generate an optimized image generation prompt:`;
       dataUrl: `data:image/svg+xml;base64,${base64}`,
       provider: 'fallback'
     };
+  }
+
+  // 再生成プロンプト構築（TypeScript版から移植）
+  buildRegeneratePrompt(originalPrompt, instructions, style, aspectRatio, content = "") {
+    // 言語と地域を検出（元のプロンプトから抽出、なければ修正指示から）
+    const detectionContent = content || originalPrompt + " " + instructions;
+    const regionInfo = this.detectLanguageAndRegion(detectionContent);
+
+    // 言語別安全性ガイドライン
+    const safetyGuidelines = this.buildSafetyGuidelines(regionInfo);
+
+    const ratioLabel = aspectRatio === "1:1" ? "square" : aspectRatio;
+    const styleText = this.styleMap[style] || `スタイル:${style}`;
+
+    return [
+      safetyGuidelines,
+      `再生成リクエスト`,
+      `比率: ${ratioLabel}`,
+      `スタイル: ${styleText}`,
+      `地域・文化: ${regionInfo.region} (${regionInfo.era})`,
+      `文化的配慮: ${regionInfo.style}`,
+      `修正指示: ${instructions}`,
+      `--- 元のプロンプト ---`,
+      originalPrompt,
+    ].join("\n");
+  }
+
+  // 単一画像再生成
+  async regenerateSingleImage(originalPrompt, instructions, options = {}) {
+    try {
+      const { taste = 'photo', aspectRatio = '1:1' } = options;
+      
+      console.log(`[imageGen] Starting regeneration with instructions: ${instructions}`);
+
+      const regeneratePrompt = this.buildRegeneratePrompt(originalPrompt, instructions, taste, aspectRatio);
+      console.log(`[imageGen] Regenerate prompt:`, regeneratePrompt);
+
+      let imageDataUrl = null;
+
+      if (!this.mockMode) {
+        imageDataUrl = await this.generateWithGemini(regeneratePrompt, aspectRatio);
+      }
+
+      if (!imageDataUrl) {
+        imageDataUrl = this.generateEnhancedPlaceholder(
+          { index: 0, body: instructions, heading: '修正版' },
+          regeneratePrompt,
+          taste,
+          aspectRatio
+        );
+      }
+
+      return {
+        success: true,
+        image: {
+          id: `regenerated-${Date.now()}`,
+          title: '修正版画像',
+          dataUrl: imageDataUrl,
+          prompt: regeneratePrompt,
+          provider: this.mockMode ? 'enhanced-mock' : 'gemini-2.5-flash'
+        },
+        message: '画像を修正しました'
+      };
+
+    } catch (error) {
+      console.error('[imageGen] Regeneration error:', error);
+      
+      return {
+        success: false,
+        message: '画像の修正に失敗しました',
+        error: error.message
+      };
+    }
   }
 }
 

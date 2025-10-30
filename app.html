@@ -604,10 +604,9 @@
           <div class="image-info">
             <div class="image-title">${image.title || `画像 ${index + 1}`}</div>
             ${image.heading ? `<div style="font-size: 12px; color: #888; margin-bottom: 5px;">📑 ${image.heading}</div>` : ''}
-            <div class="image-prompt">${image.prompt || 'プロンプト情報なし'}</div>
             <div style="display: flex; gap: 10px; margin-top: 10px;">
               <button class="download-btn" onclick="downloadImage('${image.title || `画像_${index + 1}`}', '${image.dataUrl}')" style="flex: 1;">
-                💾 ダウンロード
+                ⬇️ ダウンロード
               </button>
               <button class="regenerate-btn" onclick="showRegenerateOptions(${index})" style="flex: 1;">
                 🔄 修正
