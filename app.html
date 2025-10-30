@@ -405,7 +405,7 @@
     <div class="results-section" id="resultsSection">
       <div id="loadingSection" class="loading hidden">
         <div class="loading-spinner"></div>
-        <div>AI画像を生成しています...</div>
+        <div id="loadingMessage">AIが文章を分割しています...</div>
         <div style="font-size: 14px; margin-top: 10px;">しばらくお待ちください</div>
       </div>
       
@@ -460,21 +460,21 @@
             console.log('✅ ユーザー情報取得成功:', data.user.email);
           } else {
             console.log('❌ 認証失敗 - ログアウト実行');
-            alert(`認証エラー: ${xhr.status}\n${xhr.responseText}\n\nログアウトします。`);
+            alert('ログアウトします');
             logout();
           }
         };
         
         xhr.onerror = function() {
           console.log('❌ ネットワークエラー - ログアウト実行');
-          alert('ネットワークエラーが発生しました。\n\nログアウトします。');
+          alert('ログアウトします');
           logout();
         };
         
         xhr.send();
       } catch (error) {
         console.log('❌ リクエストエラー:', error);
-        alert(`リクエストエラー: ${error.message}\n\nログアウトします。`);
+        alert('ログアウトします');
         logout();
       }
     }
@@ -526,6 +526,13 @@
       generateBtn.textContent = '生成中...';
       loadingSection.classList.remove('hidden');
       imagesSection.classList.add('hidden');
+      
+      // AI分割メッセージを表示してから画像生成メッセージに変更
+      const loadingMessage = document.getElementById('loadingMessage');
+      loadingMessage.textContent = 'AIが文章を分割しています...';
+      setTimeout(() => {
+        loadingMessage.textContent = '画像を生成しています...';
+      }, 2000);
 
       try {
         const token = localStorage.getItem('access_token');
