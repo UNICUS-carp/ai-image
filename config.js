@@ -9,6 +9,7 @@ class ConfigManager {
     
     this.optionalEnvVars = {
       'OPENAI_API_KEY': 'OpenAI API access will be unavailable',
+      'PAID_USER_EMAILS': 'No paid users configured - all users will require manual approval',
       'DATABASE_PATH': 'Will use default path ./illustauto.db',
       'ALLOWED_ORIGINS': 'Will use default https://unicus.top',
       'BACKUP_DIR': 'Will use default ./backups',
@@ -19,7 +20,9 @@ class ConfigManager {
       'SMTP_USER': 'Will use console output for emails',
       'SMTP_PASS': 'Will use console output for emails',
       'SMTP_FROM': 'Will use default sender address',
-      'RESEND_API_KEY': 'Will use console output for emails'
+      'RESEND_API_KEY': 'Will use console output for emails',
+      'STRIPE_SECRET_KEY': 'Stripe payment integration will be unavailable',
+      'STRIPE_WEBHOOK_SECRET': 'Stripe webhook validation will be unavailable'
     };
   }
 
@@ -49,13 +52,25 @@ class ConfigManager {
     }
 
     // メールアドレス形式の検証
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    
     if (process.env.ADMIN_EMAILS) {
       const emails = process.env.ADMIN_EMAILS.split(',').map(e => e.trim());
-      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
       
       for (const email of emails) {
         if (!emailRegex.test(email)) {
           warnings.push(`Invalid admin email format: ${email}`);
+        }
+      }
+    }
+
+    // 有料ユーザーメールアドレス形式の検証
+    if (process.env.PAID_USER_EMAILS) {
+      const emails = process.env.PAID_USER_EMAILS.split(',').map(e => e.trim());
+      
+      for (const email of emails) {
+        if (!emailRegex.test(email)) {
+          warnings.push(`Invalid paid user email format: ${email}`);
         }
       }
     }
@@ -210,8 +225,10 @@ class ConfigManager {
       databasePath: this.get('DATABASE_PATH', './illustauto.db'),
       allowedOrigins: this.getArray('ALLOWED_ORIGINS', ['https://unicus.top']),
       adminCount: this.getArray('ADMIN_EMAILS').length,
+      paidUserCount: this.getArray('PAID_USER_EMAILS').length,
       backupEnabled: !!this.get('BACKUP_DIR'),
-      backupInterval: this.getNumber('BACKUP_INTERVAL_HOURS', 24)
+      backupInterval: this.getNumber('BACKUP_INTERVAL_HOURS', 24),
+      stripeEnabled: !!this.get('STRIPE_SECRET_KEY')
     };
   }
 }
