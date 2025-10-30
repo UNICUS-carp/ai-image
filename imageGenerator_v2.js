@@ -1,6 +1,4 @@
-// Enhanced Image Generator based on existing TypeScript implementation
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import { Buffer } from 'buffer';
 
 class ImageGeneratorV2 {
   constructor() {
@@ -12,231 +10,95 @@ class ImageGeneratorV2 {
       this.mockMode = true;
     } else {
       this.genAI = new GoogleGenerativeAI(this.geminiApiKey);
-      this.geminiModel = this.genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+      this.geminiModel = this.genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
       this.mockMode = false;
-      console.log('[imageGen] Gemini 2.5 Flash initialized');
+      console.log('[imageGen] Gemini API initialized');
     }
 
-    // Style mappings based on original TypeScript implementation
-    this.styleMap = {
-      'photo': '写真風、リアリスティック、高品質な写真のような',
-      'deformed': 'デフォルメ、キャラクター風、可愛らしい、アニメ調',
-      'watercolor': '手書き風、水彩画、アナログ感のある、温かみのある',
-      'detailed': '精密、詳細、高解像度、細かい描写の',
-      'pictogram': 'ピクトグラム、アイコン風、シンプル、記号的な',
-      // 下位互換性のための追加マッピング
-      'modern': '写真風、リアリスティック、高品質な写真のような',
-      'anime': 'デフォルメ、キャラクター風、可愛らしい、アニメ調',
-      'realistic': '写真風、リアリスティック、高品質な写真のような'
-    };
+    if (this.openaiApiKey) {
+      console.log('[imageGen] OpenAI API available for enhanced semantic splitting');
+    }
   }
 
-  // ============================================
-  // Language Detection and Regional Adaptation
-  // ============================================
-
-  detectLanguageAndRegion(content) {
-    const text = content.toLowerCase();
-    
-    // 歴史的コンテンツの検出
-    const historicalContext = this.detectHistoricalContext(content);
-    
-    // 言語パターン検出
-    const patterns = {
-      japanese: {
-        chars: /[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]/g,
-        keywords: ['です', 'ます', 'ある', 'する', 'という', 'こと', 'ため', 'から']
-      },
-      english: {
-        chars: /[a-zA-Z]/g,
-        keywords: ['the', 'and', 'or', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by']
-      },
-      chinese: {
-        chars: /[\u4E00-\u9FFF]/g,
-        keywords: ['的', '是', '在', '有', '了', '我', '你', '他', '她', '我们', '这', '那']
-      },
-      korean: {
-        chars: /[\uAC00-\uD7AF\u1100-\u11FF\u3130-\u318F]/g,
-        keywords: ['는', '을', '를', '이', '가', '에', '의', '와', '과', '로', '으로']
-      }
-    };
-
-    const scores = {};
-    
-    // 文字種類による判定
-    Object.keys(patterns).forEach(lang => {
-      const charMatches = content.match(patterns[lang].chars) || [];
-      const keywordMatches = patterns[lang].keywords.filter(keyword => 
-        text.includes(keyword)
-      ).length;
-      
-      scores[lang] = charMatches.length + (keywordMatches * 10);
-    });
-
-    // 最高スコアの言語を判定
-    const detectedLang = Object.keys(scores).reduce((a, b) => 
-      scores[a] > scores[b] ? a : b
-    );
-
-    // 地域マッピング
-    const regionMapping = {
-      japanese: {
-        region: '日本',
-        culture: '現代日本',
-        style: '現代的な日本のビジネス環境',
-        era: '2020年代の現代日本'
-      },
-      english: {
-        region: '欧米圏',
-        culture: '欧米文化',
-        style: '現代的な欧米のビジネス環境',
-        era: '2020年代の現代欧米'
-      },
-      chinese: {
-        region: '中華圏',
-        culture: '中華文化',
-        style: '現代的な中華圏のビジネス環境',
-        era: '2020年代の現代中国'
-      },
-      korean: {
-        region: '韓国',
-        culture: '韓国文化',
-        style: '現代的な韓国のビジネス環境',
-        era: '2020年代の現代韓国'
-      }
-    };
-
-    const result = regionMapping[detectedLang] || regionMapping.japanese;
-    
-    console.log(`[imageGen] Language detected: ${detectedLang}, Region: ${result.region}`);
-    
-    return {
-      language: detectedLang,
-      confidence: scores[detectedLang] / Math.max(content.length, 1),
-      historical: historicalContext,
-      ...result
-    };
-  }
-
-  detectHistoricalContext(content) {
-    const text = content.toLowerCase();
-    
-    // 歴史的キーワードと年代の検出
-    const historicalIndicators = {
-      ancient: {
-        keywords: ['古代', '紀元前', '原始', '石器時代', '青銅器', 'ancient', 'prehistoric', 'bc', 'stone age'],
-        score: 10
-      },
-      classical: {
-        keywords: ['古典', '中世', '平安', '鎌倉', '室町', '戦国', 'classical', 'medieval', 'feudal'],
-        score: 9
-      },
-      early_modern: {
-        keywords: ['江戸', '明治', '大正', '昭和初期', '19世紀', '18世紀', '17世紀', 'edo', 'meiji', 'taisho'],
-        score: 8
-      },
-      modern: {
-        keywords: ['昭和', '20世紀', '戦前', '戦後', '1900年代', '1950年代', '1960年代'],
-        score: 6
-      },
-      contemporary: {
-        keywords: ['平成', '令和', '21世紀', '2000年代', '2010年代', '現代'],
-        score: 2
-      }
-    };
-
-    // 年号パターンの検出
-    const eraPatterns = [
-      /(\d{1,4})年/g,  // 年号
-      /(\d{3,4})世紀/g, // 世紀
-      /紀元前\s*(\d+)/g, // 紀元前
-      /(\d{4})年代/g    // 年代
-    ];
-
-    let historicalScore = 0;
-    let detectedEra = 'contemporary';
-    let specificYear = null;
-
-    // キーワードベースの検出
-    Object.entries(historicalIndicators).forEach(([era, data]) => {
-      const matches = data.keywords.filter(keyword => text.includes(keyword)).length;
-      if (matches > 0) {
-        const score = matches * data.score;
-        if (score > historicalScore) {
-          historicalScore = score;
-          detectedEra = era;
+  // 高度な記事分割（OpenAI GPT対応）
+  async splitArticle(content, maxImages = 5) {
+    const headings = this.detectHeadings(content);
+    if (headings.length > 0) {
+      // 見出しがある場合：OpenAI GPTで見出しベース分析
+      if (this.openaiApiKey) {
+        try {
+          return await this.splitContentWithOpenAI(content, true, headings.map(h => h.heading), maxImages);
+        } catch (error) {
+          console.warn('[imageGen] OpenAI splitting failed, falling back to local merge:', error.message);
+          return this.mergeSimilarHeadings(headings, Math.min(maxImages, 5));
         }
       }
-    });
+      return this.mergeSimilarHeadings(headings, Math.min(maxImages, 5));
+    }
 
-    // 年号パターンの解析
-    eraPatterns.forEach(pattern => {
-      const matches = content.match(pattern);
-      if (matches) {
-        matches.forEach(match => {
-          const yearMatch = match.match(/\d+/);
-          if (yearMatch) {
-            const year = parseInt(yearMatch[0]);
-            specificYear = year;
-            
-            // 年代に基づく時代判定
-            if (year < 500) {
-              detectedEra = 'ancient';
-              historicalScore = Math.max(historicalScore, 10);
-            } else if (year < 1600) {
-              detectedEra = 'classical';
-              historicalScore = Math.max(historicalScore, 9);
-            } else if (year < 1900) {
-              detectedEra = 'early_modern';
-              historicalScore = Math.max(historicalScore, 8);
-            } else if (year < 1990) {
-              detectedEra = 'modern';
-              historicalScore = Math.max(historicalScore, 6);
-            }
-          }
+    if (content.length < 200) {
+      return [{ index: 0, text: content.trim(), heading: null }];
+    }
+
+    // 見出しがない場合：OpenAI GPTでセマンティック分析
+    if (this.openaiApiKey) {
+      try {
+        return await this.splitContentWithOpenAI(content, false, [], maxImages);
+      } catch (error) {
+        console.warn('[imageGen] OpenAI splitting failed, falling back to deterministic split:', error.message);
+        return this.semanticSplit(content, {
+          maxChunks: Math.min(maxImages, 5),
+          maxCharsPerChunk: 400,
         });
       }
-    });
+    }
 
-    const isHistorical = historicalScore > 5;
-    
-    console.log(`[imageGen] Historical context detected: ${detectedEra}, score: ${historicalScore}, isHistorical: ${isHistorical}`);
-    
-    return {
-      isHistorical,
-      era: detectedEra,
-      score: historicalScore,
-      specificYear
-    };
+    return this.semanticSplit(content, {
+      maxChunks: Math.min(maxImages, 5),
+      maxCharsPerChunk: 400,
+    });
   }
 
-  // ============================================
-  // Chunking Logic (from chunking.ts)
-  // ============================================
-
-  detectHeadings(body) {
+  // マークダウン風の見出しを検出
+  detectHeadings(content) {
     const HEADING_REGEX = /^(#{1,6}|[*-]\s+|\d+\.)\s*(.+)$/gm;
     const matches = [];
     let lastIndex = 0;
     let match;
 
-    while ((match = HEADING_REGEX.exec(body)) !== null) {
+    while ((match = HEADING_REGEX.exec(content)) !== null) {
       const headingStart = match.index;
       const heading = match[2].trim();
       if (matches.length > 0) {
-        matches[matches.length - 1].content = body.slice(lastIndex, headingStart).trim();
+        matches[matches.length - 1].content = content.slice(lastIndex, headingStart).trim();
       }
       matches.push({ heading, content: "" });
       lastIndex = HEADING_REGEX.lastIndex;
     }
 
     if (matches.length > 0) {
-      matches[matches.length - 1].content = body.slice(lastIndex).trim();
+      matches[matches.length - 1].content = content.slice(lastIndex).trim();
     }
 
     return matches.filter((item) => item.content.length > 0);
   }
 
+  // 類似した見出しをマージ
+  mergeSimilarHeadings(headings, maxChunks) {
+    const merged = [];
+    for (const item of headings) {
+      const found = merged.find((chunk) => this.isSimilarHeading(chunk.heading || "", item.heading));
+      if (found) {
+        found.text = `${found.text}\n\n${item.content}`;
+      } else {
+        merged.push({ index: merged.length, heading: item.heading, text: item.content });
+      }
+    }
+
+    return merged.slice(0, maxChunks).map((chunk, index) => ({ ...chunk, index }));
+  }
+
+  // 見出しの類似性判定
   isSimilarHeading(a, b) {
     if (!a || !b) return false;
     const normalizedA = a.toLowerCase();
@@ -244,22 +106,9 @@ class ImageGeneratorV2 {
     return normalizedA === normalizedB || normalizedA.includes(normalizedB) || normalizedB.includes(normalizedA);
   }
 
-  mergeSimilarHeadings(headings, maxChunks) {
-    const merged = [];
-    for (const item of headings) {
-      const found = merged.find((chunk) => this.isSimilarHeading(chunk.heading || "", item.heading));
-      if (found) {
-        found.body = `${found.body}\n\n${item.content}`;
-      } else {
-        merged.push({ index: merged.length, heading: item.heading, body: item.content });
-      }
-    }
-
-    return merged.slice(0, maxChunks).map((chunk, index) => ({ ...chunk, index }));
-  }
-
-  semanticSplit(body, options) {
-    const sentences = body.split(/(?<=。|\.)\s*/);
+  // セマンティック分割（決定論的実装）
+  semanticSplit(content, options) {
+    const sentences = content.split(/(?<=。|\.)[\s]*/);
     const chunks = [];
     let buffer = "";
 
@@ -270,7 +119,7 @@ class ImageGeneratorV2 {
         (chunks.length + 1 === options.maxChunks && prospective.length > options.maxCharsPerChunk);
 
       if (overLimit && buffer.length > 0) {
-        chunks.push({ index: chunks.length, body: buffer.trim() });
+        chunks.push({ index: chunks.length, text: buffer.trim(), heading: null });
         buffer = sentence;
       } else {
         buffer = prospective;
@@ -280,321 +129,459 @@ class ImageGeneratorV2 {
     }
 
     if (buffer.trim().length > 0 && chunks.length < options.maxChunks) {
-      chunks.push({ index: chunks.length, body: buffer.trim() });
+      chunks.push({ index: chunks.length, text: buffer.trim(), heading: null });
     }
 
     return chunks.slice(0, options.maxChunks);
   }
 
-  splitArticle(body, maxImages) {
-    const headings = this.detectHeadings(body);
-    if (headings.length > 0) {
-      return this.mergeSimilarHeadings(headings, Math.min(maxImages, 5));
+  // OpenAI GPT-4o-miniによる高度なセマンティック分割
+  async splitContentWithOpenAI(content, hasHeadings, headings, maxImages = 5) {
+    console.log("[imageGen] Using OpenAI GPT-4o-mini for content analysis");
+    
+    let systemPrompt, userPrompt;
+    
+    if (hasHeadings && headings.length > 0) {
+      systemPrompt = `あなたは日本語の記事を分析し、画像生成に適した重要で視覚的な場面を抽出する専門家です。
+記事から各見出しに対応する本文の中で、最も視覚的に表現しやすく、記事の価値を伝える重要な場面を抽出してください。
+抽出の優先順位：
+1. 記事の主要テーマに直結する重要な場面
+2. 具体的な動作・行動・状況の描写
+3. 問題・解決・結果を示す場面
+4. 読者が理解・実践に必要な視覚的要素
+5. 感情移入できる日常的な場面
+必ずJSON形式で出力してください。`;
+      
+      userPrompt = `【記事の見出し一覧】
+${headings.map((h, i) => `${i + 1}. ${h}`).join('\n')}
+
+【本文】
+${content}
+
+【要求】
+- 各見出しに対応する本文から、最も重要で視覚的な場面を抽出
+- 要約ではなく、原文から重要な部分をそのまま抽出
+- 6つ以上ある場合は、最も重要な5つの見出しを選択
+- 各抽出は100-400字程度
+
+出力形式：
+{
+  "chunks": [
+    {
+      "heading": "見出し名",
+      "text": "抽出した重要で視覚的な本文",
+      "importance": "この部分が重要な理由",
+      "visualElements": "主要な視覚要素（人物・場所・動作）"
+    }
+  ]
+}`;
+    } else {
+      systemPrompt = `あなたは日本語の記事を分析し、画像生成に適した重要で視覚的な場面を抽出する専門家です。
+記事の核心を理解し、最も価値のある視覚的場面を重要度順に抽出してください。単なる装飾的描写ではなく、記事の目的を達成するために不可欠な場面を選択してください。
+必ずJSON形式で出力してください。`;
+      
+      userPrompt = `【本文】
+${content}
+
+【要求】
+- 記事から最も重要で視覚的な場面を重要度順に抽出
+- 要約ではなく、原文から重要な部分をそのまま抽出
+- 最大5つまで
+- 各抽出は100-400字程度
+
+出力形式：
+{
+  "chunks": [
+    {
+      "text": "抽出した重要で視覚的な本文",
+      "importance": "この部分が重要な理由",
+      "visualElements": "主要な視覚要素（人物・場所・動作）"
+    }
+  ]
+}`;
     }
 
-    if (body.length < 200) {
-      return [{ index: 0, body: body.trim() }];
-    }
-
-    return this.semanticSplit(body, {
-      maxChunks: Math.min(maxImages, 5),
-      maxCharsPerChunk: 400,
-    });
-  }
-
-  // ============================================
-  // Prompt Building Logic (from prompts.ts)
-  // ============================================
-
-  buildPrompt(params) {
-    const { chunk, style, aspectRatio = '1:1', title, chunkTitle, content } = params;
-    const body = chunk?.body || params.body || "";
-    const fullContent = content || body;
-
-    // 言語と地域を検出
-    const regionInfo = this.detectLanguageAndRegion(fullContent);
-
-    // Convert aspectRatio to display format
-    const ratioLabel = aspectRatio === "1:1" ? "square" : aspectRatio;
-
-    // Style description
-    const styleText = this.styleMap[style] || `スタイル:${style}`;
-    const scope = chunkTitle || chunk?.heading || title || "記事内容";
-
-    const timeContext = regionInfo.historical?.isHistorical 
-      ? `歴史的時代設定: ${regionInfo.historical.era}時代`
-      : regionInfo.era;
-
-    // 簡潔なプロンプト（SAFETY_GUIDELINESとbody削除）
-    return [
-      `${scope}をテーマにしたアイキャッチ用イラストを生成`,
-      `スタイル: ${styleText}`,
-      `比率: ${ratioLabel}`,
-      `地域・文化: ${regionInfo.region}`,
-      `時代設定: ${timeContext}`,
-      `文化的配慮: ${regionInfo.style}`
-    ].join("。");
-  }
-
-  buildSafetyGuidelines(regionInfo) {
-    const commonGuidelines = [
-      "SAFETY_GUIDELINES:",
-      "- 著作権を侵害しない独創的なデザイン",
-      "- 暴力的、性的、差別的な表現を避ける",
-      "- 特定の個人、企業、宗教を連想させる要素を避ける",
-      "- 年齢制限なしで使用可能な健全な内容"
-    ];
-
-    // 歴史的コンテンツかどうかで分岐
-    const isHistorical = regionInfo.historical?.isHistorical || false;
-    const historicalEra = regionInfo.historical?.era || 'contemporary';
-
-    // 地域別ガイドライン
-    const regionalGuidelines = {
-      japanese: isHistorical ? [
-        "- 日本の法律と文化に準拠した適切な内容で生成",
-        `- 歴史的内容のため${historicalEra}時代の雰囲気を重視`,
-        "- 歴史的な建築、服装、生活様式を時代考証に基づいて表現",
-        "- その時代特有の文化的特徴（建築様式、服装、道具など）を正確に反映",
-        "- 日本文化の特徴: 時代に応じた履物文化（草履、下駄、足袋など）",
-        "- 歴史的建造物（寺院、城、古民家など）の場合は適切な時代様式",
-        "- 現代的要素を避け、歴史的な雰囲気を重視"
-      ] : [
-        "- 日本の法律と文化に準拠した適切な内容で生成",
-        "- 現代的な日本のビジネス環境に適したプロフェッショナルな表現",
-        "- 古風な日本（木造建築、着物など）ではなく現代日本（2020年代）を基調とする",
-        "- オフィス、カフェ、都市部などの現代的な環境を優先",
-        "- 日本文化の特徴: 室内では靴を脱ぎ、素足やソックス姿を表現",
-        "- 玄関での靴の脱ぎ履き、スリッパの使用など日本特有の生活文化",
-        "- 畳、フローリングでの生活シーンでは必ず靴を履いていない状態"
+    const payload = {
+      model: "gpt-4o-mini",
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt }
       ],
-      english: isHistorical ? [
-        "- 欧米の法律と文化に準拠した適切な内容で生成",
-        `- 歴史的内容のため${historicalEra}時代の欧米文化を重視`,
-        "- 歴史的な欧米の建築、服装、生活様式を時代考証に基づいて表現",
-        "- その時代特有の文化的特徴を正確に反映"
-      ] : [
-        "- 欧米の法律と文化に準拠した適切な内容で生成",
-        "- 現代的な欧米のビジネス環境に適したプロフェッショナルな表現",
-        "- 現代的な都市環境、オフィス、カフェなどの欧米的な設定",
-        "- 多様性を尊重した現代的な表現"
-      ],
-      chinese: isHistorical ? [
-        "- 中華圏の法律と文化に準拠した適切な内容で生成",
-        `- 歴史的内容のため${historicalEra}時代の中華文化を重視`,
-        "- 歴史的な中華建築、服装、生活様式を時代考証に基づいて表現",
-        "- その時代特有の中華文化的特徴を正確に反映"
-      ] : [
-        "- 中華圏の法律と文化に準拠した適切な内容で生成",
-        "- 現代的な中華圏のビジネス環境に適したプロフェッショナルな表現",
-        "- 現代中国の都市部、オフィス環境を基調とする",
-        "- 伝統的ではなく現代的な中華圏の表現を優先"
-      ],
-      korean: isHistorical ? [
-        "- 韓国の法律と文化に準拠した適切な内容で生成",
-        `- 歴史的内容のため${historicalEra}時代の韓国文化を重視`,
-        "- 歴史的な韓国の建築、服装、生活様式を時代考証に基づいて表現",
-        "- その時代特有の韓国文化的特徴を正確に反映"
-      ] : [
-        "- 韓国の法律と文化に準拠した適切な内容で生成",
-        "- 現代的な韓国のビジネス環境に適したプロフェッショナルな表現",
-        "- 現代韓国の都市部、オフィス環境を基調とする",
-        "- K-culture要素を含む現代的な韓国らしさの表現"
-      ]
+      max_tokens: 4000,
+      temperature: 0.3
     };
 
-    const specificGuidelines = regionalGuidelines[regionInfo.language] || regionalGuidelines.japanese;
+    console.log("[imageGen] Sending request to OpenAI API...");
+    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${this.openaiApiKey}`
+      },
+      body: JSON.stringify(payload)
+    });
 
-    return [
-      ...commonGuidelines,
-      ...specificGuidelines,
-      ""
-    ].join("\n");
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`OpenAI API error: ${response.status} - ${errorText}`);
+    }
+
+    const data = await response.json();
+    const content = data.choices?.[0]?.message?.content;
+    
+    if (!content) {
+      throw new Error("No content in OpenAI response");
+    }
+
+    console.log("[imageGen] OpenAI response received:", content.substring(0, 200) + "...");
+
+    try {
+      const parsed = JSON.parse(content);
+      const chunks = parsed.chunks || [];
+      
+      return chunks.slice(0, Math.min(maxImages, 5)).map((chunk, index) => ({
+        index,
+        text: chunk.text,
+        heading: chunk.heading || null,
+        importance: chunk.importance,
+        visualElements: chunk.visualElements
+      }));
+    } catch (parseError) {
+      console.error("[imageGen] Failed to parse OpenAI response as JSON:", parseError);
+      throw new Error("Invalid JSON response from OpenAI");
+    }
   }
 
-  // ============================================
-  // Enhanced Image Generation
-  // ============================================
+  // プロンプト生成（見出し対応）
+  async generateImagePrompt(chunk, style = 'modern', aspectRatio = '1:1') {
+    if (this.mockMode) {
+      return this.generateMockPrompt(chunk.text, style, chunk.heading);
+    }
 
-  async generateImages(content, options = {}) {
     try {
-      const { taste = 'photo', aspectRatio = '1:1', maxImages = 3 } = options;
+      const styleGuides = {
+        photo: 'photorealistic, detailed, high quality photography style',
+        anime: 'anime style, manga illustration, Japanese animation aesthetic',
+        '3d': '3D rendered, computer graphics, realistic 3D modeling',
+        pixel: 'pixel art style, retro gaming aesthetic, 8-bit graphics',
+        watercolor: 'watercolor painting style, soft brushstrokes, artistic',
+        // 旧スタイル（互換性用）
+        modern: 'modern, clean, professional, minimalist aesthetic',
+        classic: 'classic, elegant, traditional, refined style',
+        minimal: 'minimal, simple, clean lines, monochromatic',
+        colorful: 'vibrant, colorful, dynamic, energetic'
+      };
+
+      const headingText = chunk.heading ? `\nHeading: "${chunk.heading}"` : '';
+      const scope = chunk.heading || '記事内容';
+
+      const systemPrompt = `
+Create a detailed image generation prompt for AI image creation based on this content.
+
+Requirements:
+- Visual style: ${styleGuides[style] || styleGuides.modern}
+- No text or words in the image
+- Professional, blog-appropriate illustration
+- Aspect ratio: ${aspectRatio}
+- Diversity: Image ${chunk.index + 1} of multiple images (ensure unique composition)
+
+Content scope: ${scope}${headingText}
+
+Text content: "${chunk.text}"
+
+Generate a concise visual prompt (under 150 characters):`;
+
+      const result = await this.geminiModel.generateContent(systemPrompt);
+      const response = result.response;
+      const imagePrompt = response.text().trim();
       
-      console.log(`[imageGen] Starting enhanced generation`);
-      console.log(`[imageGen] - Style: ${taste} (mapped: ${this.styleMap[taste] || 'unknown'})`);
-      console.log(`[imageGen] - Aspect Ratio: ${aspectRatio}`);
-      console.log(`[imageGen] - Max Images: ${maxImages}`);
-      console.log(`[imageGen] - Content length: ${content.length} chars`);
+      console.log(`[imageGen] Generated prompt for chunk ${chunk.index} "${chunk.heading || 'no heading'}":`, imagePrompt);
+      return imagePrompt;
+      
+    } catch (error) {
+      console.error('[imageGen] Prompt generation error:', error);
+      return this.generateMockPrompt(chunk.text, style, chunk.heading);
+    }
+  }
 
-      // Split content using sophisticated chunking
-      const chunks = this.splitArticle(content, maxImages);
+  // モックプロンプト生成（見出し対応）
+  generateMockPrompt(text, style, heading) {
+    const keywords = text
+      .replace(/[^\w\s\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]/g, ' ')
+      .split(' ')
+      .filter(w => w.length > 2)
+      .slice(0, 5)
+      .join(' ');
+
+    const styleMap = {
+      photo: 'photorealistic professional',
+      anime: 'anime illustration',
+      '3d': '3D rendered graphics',
+      pixel: 'pixel art retro',
+      watercolor: 'watercolor artistic',
+      modern: 'modern professional',
+      classic: 'elegant classic',
+      minimal: 'minimalist clean',
+      colorful: 'vibrant colorful'
+    };
+
+    const headingKeywords = heading ? heading.replace(/[^\w\s\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]/g, ' ').split(' ').filter(w => w.length > 1).slice(0, 2).join(' ') : '';
+    const allKeywords = [headingKeywords, keywords].filter(k => k).join(' ');
+
+    return `${allKeywords}, ${styleMap[style] || 'professional'}, high quality illustration`;
+  }
+
+  // Google Gemini 2.5 Flashによる実際の画像生成
+  async generateRealImage(prompt, aspectRatio = '1:1') {
+    if (this.mockMode) {
+      return null; // モックモードでは実画像生成しない
+    }
+
+    try {
+      console.log('[imageGen] Generating image with Gemini 2.5 Flash...');
+      
+      // Gemini 2.5 Flash Image Generation API
+      return await this.generateImageWithGemini2_5Flash(prompt, aspectRatio);
+      
+    } catch (error) {
+      console.error('[imageGen] Gemini 2.5 Flash generation error:', error);
+      return null;
+    }
+  }
+
+  // Google Gemini 2.5 Flash Image APIによる画像生成（v1_backup仕様準拠）
+  async generateImageWithGemini2_5Flash(prompt, aspectRatio = '1:1') {
+    try {
+      console.log(`[imageGen] Generating image with Gemini 2.5 Flash Image: ${aspectRatio}`);
+      
+      // v1_backupと同じモデル名を使用
+      const modelName = "gemini-2.5-flash-image";
+      const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${this.geminiApiKey}`;
+      
+      // v1_backupの正確なAPI仕様に従う
+      const requestBody = {
+        contents: [{
+          parts: [{
+            text: prompt
+          }]
+        }],
+        generationConfig: {
+          response_modalities: ["IMAGE"]  // v1_backupの重要な設定
+        }
+      };
+
+      // v1_backupのアスペクト比設定を追加
+      if (aspectRatio && aspectRatio !== "1:1") {
+        requestBody.generationConfig.image_config = {
+          aspect_ratio: aspectRatio
+        };
+        console.log(`[imageGen] ✅ aspectRatio added to image_config: ${aspectRatio}`);
+      } else {
+        console.log(`[imageGen] ℹ️ Using default aspect ratio (1:1)`);
+      }
+
+      console.log(`[imageGen] API endpoint: ${apiUrl}`);
+      console.log(`[imageGen] Request body:`, JSON.stringify(requestBody, null, 2));
+
+      const response = await fetch(apiUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(requestBody)
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.warn(`[imageGen] Gemini 2.5 Flash Image API error: ${response.status} - ${errorText}`);
+        throw new Error(`Gemini API error: ${response.status} - ${errorText}`);
+      }
+
+      const data = await response.json();
+      console.log(`[imageGen] Gemini API response:`, JSON.stringify(data, null, 2));
+      
+      // v1_backupの正確なレスポンス処理ロジックに従う
+      if (data.candidates && data.candidates[0]) {
+        const candidate = data.candidates[0];
+        const parts = candidate.content?.parts;
+        
+        if (parts) {
+          console.log(`[imageGen] Found ${parts.length} parts in response`);
+          
+          // v1_backupと同じ方法で画像データを探す
+          let imagePart = parts.find(p => p.inline_data?.mime_type?.startsWith("image/"));
+          if (!imagePart) {
+            // inlineData（キャメルケース）も試す
+            imagePart = parts.find(p => p.inlineData?.mimeType?.startsWith("image/"));
+          }
+          
+          console.log("[imageGen] Image part found:", !!imagePart);
+          
+          if (imagePart) {
+            const imageData = imagePart.inline_data?.data || imagePart.inlineData?.data;
+            const mimeType = imagePart.inline_data?.mime_type || imagePart.inlineData?.mimeType;
+            
+            if (imageData && mimeType) {
+              console.log('[imageGen] Gemini 2.5 Flash Image generated successfully');
+              console.log(`[imageGen] Image type: ${mimeType}, data length: ${imageData.length}`);
+              return `data:${mimeType};base64,${imageData}`;
+            } else {
+              console.error("[imageGen] Image part found but no data or mimeType");
+              console.error("[imageGen] Image part structure:", JSON.stringify(imagePart, null, 2));
+            }
+          } else {
+            console.error("[imageGen] No image data in response parts");
+            parts.forEach((part, index) => {
+              console.log(`[imageGen] Part ${index}:`, Object.keys(part));
+              if (part.inlineData) {
+                console.log(`[imageGen]     - Has inlineData with keys:`, Object.keys(part.inlineData));
+              }
+              if (part.text) {
+                console.log(`[imageGen]     - Has text (length ${part.text.length})`);
+              }
+            });
+          }
+        }
+      }
+      
+      console.warn('[imageGen] No image data found in Gemini 2.5 Flash response');
+      return null;
+      
+    } catch (error) {
+      console.error('[imageGen] Gemini 2.5 Flash Image generation failed:', error);
+      return null;
+    }
+  }
+
+  // フォールバック: Gemini Pro APIによる画像生成（テキスト→画像プロンプト変換）
+  async generateImageWithGeminiPro(prompt, aspectRatio = '1:1') {
+    try {
+      console.log('[imageGen] Fallback: Using Gemini Pro for enhanced prompt generation');
+      
+      // Gemini Proで画像生成プロンプトを最適化
+      const optimizedPrompt = await this.optimizeImagePromptWithGemini(prompt, aspectRatio);
+      
+      // 注意: 現在のGemini APIは直接的な画像生成をサポートしていません
+      // 実際の本番環境では、最適化されたプロンプトを外部画像生成サービスに送信
+      console.log('[imageGen] Optimized prompt:', optimizedPrompt);
+      console.log('[imageGen] Note: Direct image generation not available, using enhanced placeholder');
+      
+      return null; // プレースホルダー画像を使用
+      
+    } catch (error) {
+      console.error('[imageGen] Gemini Pro fallback failed:', error);
+      return null;
+    }
+  }
+
+  // Gemini Proによるプロンプト最適化
+  async optimizeImagePromptWithGemini(prompt, aspectRatio) {
+    try {
+      const systemPrompt = `You are an expert image generation prompt optimizer. Transform the given prompt into a highly detailed, specific prompt optimized for AI image generation.
+
+Requirements:
+- Enhance visual details and composition
+- Specify lighting, colors, and atmosphere  
+- Add technical photography/art terms
+- Ensure the description is vivid and specific
+- Aspect ratio: ${aspectRatio}
+- Keep under 200 words
+
+Original prompt: ${prompt}
+
+Generate an optimized image generation prompt:`;
+
+      const result = await this.geminiModel.generateContent(systemPrompt);
+      const response = result.response;
+      const optimizedPrompt = response.text().trim();
+      
+      return optimizedPrompt;
+    } catch (error) {
+      console.error('[imageGen] Prompt optimization failed:', error);
+      return prompt; // 元のプロンプトを返す
+    }
+  }
+
+  // メイン画像生成関数
+  async generateImages(content, options = {}) {
+    const {
+      taste = 'modern',
+      aspectRatio = '1:1',
+      maxImages = 3
+    } = options;
+
+    try {
+      console.log(`[imageGen] Generating ${maxImages} images for content...`);
+      
+      // 1. 記事を分割（OpenAI GPT対応）
+      const chunks = await this.splitArticle(content, maxImages);
       console.log(`[imageGen] Split content into ${chunks.length} chunks`);
-
+      
+      // 2. 各チャンクに対して画像生成
       const images = [];
-
-      // Generate images for each chunk
       for (const chunk of chunks) {
-        const prompt = this.buildPrompt({
-          chunk,
-          style: taste,
-          aspectRatio,
-          content: content  // 全体コンテンツを言語検出用に渡す
-        });
-
-        console.log(`[imageGen] Generating image ${chunk.index + 1} with prompt:`, prompt);
-
-        let imageDataUrl = null;
-
-        if (!this.mockMode) {
-          // Try Gemini 2.5 Flash with image generation
-          imageDataUrl = await this.generateWithGemini(prompt, aspectRatio);
+        const prompt = await this.generateImagePrompt(chunk, taste, aspectRatio);
+        
+        // 実際のAI画像生成を試行
+        const realImage = await this.generateRealImage(prompt, aspectRatio);
+        
+        if (realImage) {
+          // 実画像が生成できた場合
+          images.push({
+            id: `gemini-${chunk.index}-${Date.now()}`,
+            title: chunk.heading || `AI生成画像 ${chunk.index + 1}`,
+            heading: chunk.heading,
+            dataUrl: realImage,
+            prompt: prompt,
+            provider: 'gemini-2.5-flash-image',
+            type: 'real',
+            visualElements: chunk.visualElements,
+            importance: chunk.importance
+          });
+        } else {
+          // フォールバック：プレースホルダー画像
+          const placeholderImage = this.generatePlaceholderImage(chunk, prompt, taste, aspectRatio);
+          images.push({
+            ...placeholderImage,
+            heading: chunk.heading,
+            type: 'placeholder',
+            visualElements: chunk.visualElements,
+            importance: chunk.importance
+          });
         }
-
-        // If Gemini fails or mockMode, use enhanced placeholder
-        if (!imageDataUrl) {
-          const regionInfo = this.detectLanguageAndRegion(content);
-          imageDataUrl = this.generateEnhancedPlaceholder(chunk, prompt, taste, aspectRatio, regionInfo);
-        }
-
-        images.push({
-          id: `generated-${chunk.index}-${Date.now()}`,
-          title: chunk.heading || `画像 ${chunk.index + 1}`,
-          heading: chunk.heading,
-          dataUrl: imageDataUrl,
-          prompt: prompt,
-          provider: this.mockMode ? 'enhanced-mock' : 'gemini-2.5-flash'
-        });
       }
 
       return {
         success: true,
         images: images,
-        message: `${images.length}枚の画像を生成しました`,
-        provider: this.mockMode ? 'enhanced-mock' : 'gemini-2.5-flash'
+        message: `${images.length}枚の画像を生成しました`
       };
 
     } catch (error) {
-      console.error('[imageGen] Enhanced generation error:', error);
+      console.error('[imageGen] Generation error:', error);
       
-      // Enhanced fallback - success: true でフォールバック画像を返す
-      return {
-        success: true,
-        images: [this.generateEnhancedFallback(content, options.taste, options.aspectRatio)],
-        message: 'フォールバック画像を生成しました',
-        provider: 'enhanced-fallback',
-        error: error.message
-      };
-    }
-  }
-
-  async generateWithGemini(prompt, aspectRatio = '1:1') {
-    try {
-      console.log('[imageGen] Attempting Gemini 2.5 Flash image generation...');
-
-      // Gemini 2.5 Flash での画像生成リクエスト
-      const geminiPrompt = `画像を生成してください。アスペクト比: ${aspectRatio}\n\n${prompt}`;
-
-      // 注意: 現在のGemini APIは直接的な画像生成機能が限定的
-      // まずはテキストレスポンスを試行
-      const result = await this.geminiModel.generateContent(geminiPrompt);
-      const response = await result.response;
-      
-      // レスポンステキストをログ出力
-      console.log('[imageGen] Gemini response received:', response.text().substring(0, 200));
-
-      // 現在のGemini APIはテキストベースの画像説明のみ返すため
-      // 実際の画像生成は将来の機能として保留
-      console.log('[imageGen] Gemini 2.5 Flash currently returns text descriptions only');
-      
-      return null; // プレースホルダーを使用
-
-    } catch (error) {
-      console.error('[imageGen] Gemini generation failed:', error);
-      console.error('[imageGen] Error details:', error.message);
-      return null;
-    }
-  }
-
-  // 再生成プロンプト構築（TypeScript版から移植）
-  buildRegeneratePrompt(originalPrompt, instructions, style, aspectRatio, content = "") {
-    // 言語と地域を検出（元のプロンプトから抽出、なければ修正指示から）
-    const detectionContent = content || originalPrompt + " " + instructions;
-    const regionInfo = this.detectLanguageAndRegion(detectionContent);
-
-    // 言語別安全性ガイドライン
-    const safetyGuidelines = this.buildSafetyGuidelines(regionInfo);
-
-    const ratioLabel = aspectRatio === "1:1" ? "square" : aspectRatio;
-    const styleText = this.styleMap[style] || `スタイル:${style}`;
-
-    return [
-      safetyGuidelines,
-      `再生成リクエスト`,
-      `比率: ${ratioLabel}`,
-      `スタイル: ${styleText}`,
-      `地域・文化: ${regionInfo.region} (${regionInfo.era})`,
-      `文化的配慮: ${regionInfo.style}`,
-      `修正指示: ${instructions}`,
-      `--- 元のプロンプト ---`,
-      originalPrompt,
-    ].join("\n");
-  }
-
-  // 単一画像再生成
-  async regenerateSingleImage(originalPrompt, instructions, options = {}) {
-    try {
-      const { taste = 'photo', aspectRatio = '1:1' } = options;
-      
-      console.log(`[imageGen] Starting regeneration with instructions: ${instructions}`);
-
-      const regeneratePrompt = this.buildRegeneratePrompt(originalPrompt, instructions, taste, aspectRatio);
-      console.log(`[imageGen] Regenerate prompt:`, regeneratePrompt);
-
-      let imageDataUrl = null;
-
-      if (!this.mockMode) {
-        imageDataUrl = await this.generateWithGemini(regeneratePrompt, aspectRatio);
-      }
-
-      if (!imageDataUrl) {
-        imageDataUrl = this.generateEnhancedPlaceholder(
-          { index: 0, body: instructions, heading: '修正版' },
-          regeneratePrompt,
-          taste,
-          aspectRatio
-        );
-      }
-
-      return {
-        success: true,
-        image: {
-          id: `regenerated-${Date.now()}`,
-          title: '修正版画像',
-          dataUrl: imageDataUrl,
-          prompt: regeneratePrompt,
-          provider: this.mockMode ? 'enhanced-mock' : 'gemini-2.5-flash'
-        },
-        message: '画像を修正しました'
-      };
-
-    } catch (error) {
-      console.error('[imageGen] Regeneration error:', error);
-      
+      // エラー時はフォールバック画像を返す
       return {
         success: false,
-        message: '画像の修正に失敗しました',
+        images: [this.generateFallbackImage(content, taste, aspectRatio)],
+        message: 'フォールバック画像を生成しました',
         error: error.message
       };
     }
   }
 
-  generateEnhancedPlaceholder(chunk, prompt, taste, aspectRatio, regionInfo = null) {
+  // プレースホルダー画像生成（実際のAI画像の代替）
+  generatePlaceholderImage(chunk, prompt, taste, aspectRatio) {
     const colorMap = {
       photo: '#2563eb',
-      deformed: '#7c3aed', 
+      anime: '#7c3aed', 
+      '3d': '#059669',
+      pixel: '#dc2626',
       watercolor: '#ea580c',
-      detailed: '#059669',
-      pictogram: '#dc2626'
+      modern: '#667eea',
+      classic: '#8b5a3c', 
+      minimal: '#888888',
+      colorful: '#ff6b6b'
     };
 
     const dimensions = {
@@ -605,44 +592,54 @@ class ImageGeneratorV2 {
 
     const color = colorMap[taste] || '#667eea';
     const { width, height } = dimensions[aspectRatio] || dimensions['1:1'];
+    const displayTitle = chunk.heading || chunk.text.substring(0, 40) + (chunk.text.length > 40 ? '...' : '');
 
     const svg = `
       <svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
         <defs>
           <linearGradient id="grad${chunk.index}" x1="0%" y1="0%" x2="100%" y2="100%">
-            <stop offset="0%" style="stop-color:${color};stop-opacity:0.9" />
-            <stop offset="100%" style="stop-color:${color};stop-opacity:0.6" />
+            <stop offset="0%" style="stop-color:${color};stop-opacity:0.8" />
+            <stop offset="100%" style="stop-color:${color};stop-opacity:0.5" />
           </linearGradient>
         </defs>
         <rect width="100%" height="100%" fill="url(#grad${chunk.index})"/>
-        <circle cx="50%" cy="50%" r="30" fill="rgba(255,255,255,0.3)"/>
-        <text x="50%" y="50%" font-family="Arial, sans-serif" font-size="24" fill="white" text-anchor="middle" dy=".3em">🎨</text>
-      </svg>
-    `;
-
-    const base64 = Buffer.from(svg).toString('base64');
-    return `data:image/svg+xml;base64,${base64}`;
-  }
-
-  generateEnhancedFallback(content, taste, aspectRatio) {
-    const title = content.substring(0, 50) + (content.length > 50 ? '...' : '');
-    
-    const svg = `
-      <svg width="400" height="400" xmlns="http://www.w3.org/2000/svg">
-        <rect width="100%" height="100%" fill="#f8f9fa"/>
-        <text x="50%" y="40%" font-family="Arial, sans-serif" font-size="18" fill="#666" text-anchor="middle" dy=".3em">⚠️ 生成エラー</text>
-        <text x="50%" y="50%" font-family="Arial, sans-serif" font-size="12" fill="#666" text-anchor="middle" dy=".3em">Enhanced Fallback</text>
-        <text x="50%" y="60%" font-family="Arial, sans-serif" font-size="10" fill="#666" text-anchor="middle" dy=".3em">${title}</text>
+        <circle cx="30" cy="30" r="20" fill="rgba(255,255,255,0.3)"/>
+        <text x="50%" y="35%" font-family="Arial, sans-serif" font-size="14" fill="white" text-anchor="middle" dy=".3em">🎨 ${taste.toUpperCase()}</text>
+        <text x="50%" y="45%" font-family="Arial, sans-serif" font-size="12" fill="white" text-anchor="middle" dy=".3em">${displayTitle}</text>
+        <text x="50%" y="65%" font-family="Arial, sans-serif" font-size="10" fill="rgba(255,255,255,0.8)" text-anchor="middle" dy=".3em">Prompt: ${prompt.substring(0, 50)}...</text>
       </svg>
     `;
 
     const base64 = Buffer.from(svg).toString('base64');
 
     return {
-      id: `enhanced-fallback-${Date.now()}`,
-      title: 'Enhanced Fallback画像',
+      id: `generated-${chunk.index}-${Date.now()}`,
+      title: chunk.heading || `生成画像 ${chunk.index + 1}`,
       dataUrl: `data:image/svg+xml;base64,${base64}`,
-      provider: 'enhanced-fallback'
+      prompt: prompt,
+      provider: this.mockMode ? 'mock' : 'gemini'
+    };
+  }
+
+  // フォールバック画像
+  generateFallbackImage(content, taste, aspectRatio) {
+    const title = content.substring(0, 50) + (content.length > 50 ? '...' : '');
+    
+    const svg = `
+      <svg width="400" height="400" xmlns="http://www.w3.org/2000/svg">
+        <rect width="100%" height="100%" fill="#f0f0f0"/>
+        <text x="50%" y="45%" font-family="Arial, sans-serif" font-size="16" fill="#666" text-anchor="middle" dy=".3em">⚠️ 画像生成エラー</text>
+        <text x="50%" y="55%" font-family="Arial, sans-serif" font-size="12" fill="#666" text-anchor="middle" dy=".3em">${title}</text>
+      </svg>
+    `;
+
+    const base64 = Buffer.from(svg).toString('base64');
+
+    return {
+      id: `fallback-${Date.now()}`,
+      title: 'フォールバック画像',
+      dataUrl: `data:image/svg+xml;base64,${base64}`,
+      provider: 'fallback'
     };
   }
 }
