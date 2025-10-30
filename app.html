@@ -223,6 +223,21 @@
       background: #218838;
     }
     
+    .regenerate-btn {
+      padding: 12px;
+      background: #6f42c1;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: 500;
+      font-size: 14px;
+    }
+    
+    .regenerate-btn:hover {
+      background: #5a32a3;
+    }
+    
     .loading {
       text-align: center;
       padding: 40px;
@@ -257,6 +272,64 @@
     .info { background: #cce7ff; color: #004085; border: 1px solid #b3d7ff; }
     
     .hidden { display: none; }
+    
+    /* モーダルスタイル */
+    .modal {
+      position: fixed;
+      z-index: 1000;
+      left: 0;
+      top: 0;
+      width: 100%;
+      height: 100%;
+      background-color: rgba(0,0,0,0.5);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    
+    .modal-content {
+      background: white;
+      border-radius: 15px;
+      max-width: 500px;
+      width: 90%;
+      max-height: 80vh;
+      overflow-y: auto;
+    }
+    
+    .modal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 20px;
+      border-bottom: 1px solid #eee;
+    }
+    
+    .modal-header h3 {
+      margin: 0;
+      color: #333;
+    }
+    
+    .close {
+      font-size: 24px;
+      cursor: pointer;
+      color: #999;
+    }
+    
+    .close:hover {
+      color: #333;
+    }
+    
+    .modal-body {
+      padding: 20px;
+    }
+    
+    .modal-footer {
+      padding: 20px;
+      border-top: 1px solid #eee;
+      display: flex;
+      gap: 10px;
+      justify-content: flex-end;
+    }
     
     @media (max-width: 768px) {
       .form-row {
@@ -306,14 +379,11 @@
         <div class="form-group">
           <label for="style">画像スタイル</label>
           <select id="style">
-            <option value="photo">📸 写真風 (Photo)</option>
-            <option value="anime">🎌 アニメ風 (Anime)</option>
-            <option value="3d">🎮 3D風 (3D Render)</option>
-            <option value="pixel">🕹️ ドット絵風 (Pixel Art)</option>
-            <option value="watercolor">🎨 水彩画風 (Watercolor)</option>
-            <option value="modern">✨ モダン (Modern)</option>
-            <option value="classic">🏛️ クラシック (Classic)</option>
-            <option value="minimal">⚪ ミニマル (Minimal)</option>
+            <option value="photo">📸 写真 (Photo)</option>
+            <option value="deformed">🎌 デフォルメ (Deformed)</option>
+            <option value="watercolor">🎨 手書き（水彩）(Watercolor)</option>
+            <option value="detailed">🔍 精密 (Detailed)</option>
+            <option value="pictogram">📊 ピクトグラム (Pictogram)</option>
           </select>
         </div>
         
@@ -347,6 +417,7 @@
 
     <div id="message"></div>
   </div>
+
 
   <script>
     const BACKEND = 'https://illustauto-backend-production.up.railway.app';
@@ -510,6 +581,9 @@
       const grid = document.getElementById('imagesGrid');
       const section = document.getElementById('imagesSection');
       
+      // 画像配列を保存（修正機能で使用）
+      originalImages = images;
+      
       grid.innerHTML = '';
       
       images.forEach((image, index) => {
@@ -524,9 +598,14 @@
             <div class="image-title">${image.title || `画像 ${index + 1}`}</div>
             ${image.heading ? `<div style="font-size: 12px; color: #888; margin-bottom: 5px;">📑 ${image.heading}</div>` : ''}
             <div class="image-prompt">${image.prompt || 'プロンプト情報なし'}</div>
-            <button class="download-btn" onclick="downloadImage('${image.title || `画像_${index + 1}`}', '${image.dataUrl}')">
-              💾 ダウンロード
-            </button>
+            <div style="display: flex; gap: 10px; margin-top: 10px;">
+              <button class="download-btn" onclick="downloadImage('${image.title || `画像_${index + 1}`}', '${image.dataUrl}')" style="flex: 1;">
+                💾 ダウンロード
+              </button>
+              <button class="regenerate-btn" onclick="autoRegenerateImage(${index})" style="flex: 1;">
+                🔄 修正
+              </button>
+            </div>
           </div>
         `;
         
@@ -544,6 +623,331 @@
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
+    }
+
+    // 画像再生成関連
+    let originalImages = [];
+
+    // 自動的にプロンプトを少し修正して再生成
+    async function autoRegenerateImage(imageIndex) {
+      if (imageIndex < 0 || !originalImages[imageIndex]) {
+        showMessage('修正対象の画像が見つかりません', 'error');
+        return;
+      }
+
+      const originalImage = originalImages[imageIndex];
+      
+      // ボタンを無効化して状態表示
+      const regenerateButtons = document.querySelectorAll('.regenerate-btn');
+      const targetBtn = regenerateButtons[imageIndex];
+      if (targetBtn) {
+        targetBtn.disabled = true;
+        targetBtn.textContent = '修正中...';
+      }
+
+      try {
+        const token = localStorage.getItem('access_token');
+        
+        // 自動修正指示を生成（プロンプトを少し変更）
+        const autoInstructions = generateAutoInstructions(originalImage.prompt);
+        
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', `${BACKEND}/api/regenerate`, true);
+        xhr.setRequestHeader('Content-Type', 'application/json');
+        xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+
+        xhr.onload = function() {
+          // ボタン状態を復元
+          if (targetBtn) {
+            targetBtn.disabled = false;
+            targetBtn.textContent = '🔄 修正';
+          }
+
+          if (xhr.status === 200) {
+            const data = JSON.parse(xhr.responseText);
+            if (data.success && data.image) {
+              // 元の画像を修正版で置き換え（リアルタイム置換）
+              originalImages[imageIndex] = data.image;
+              displayImages(originalImages);
+              showMessage(`画像 ${imageIndex + 1} を修正しました！`, 'success');
+            } else {
+              showMessage(data.message || '修正に失敗しました', 'error');
+            }
+          } else if (xhr.status === 401) {
+            logout();
+          } else {
+            const errorData = JSON.parse(xhr.responseText);
+            showMessage(errorData.message || '修正エラーが発生しました', 'error');
+          }
+        };
+
+        xhr.onerror = function() {
+          if (targetBtn) {
+            targetBtn.disabled = false;
+            targetBtn.textContent = '🔄 修正';
+          }
+          showMessage('ネットワークエラーが発生しました', 'error');
+        };
+
+        // 現在の画像サイズとテイストを使用（変更可能）
+        xhr.send(JSON.stringify({
+          originalPrompt: originalImage.prompt,
+          instructions: autoInstructions,
+          style: document.getElementById('style').value,
+          aspectRatio: document.getElementById('aspectRatio').value
+        }));
+
+      } catch (error) {
+        if (targetBtn) {
+          targetBtn.disabled = false;
+          targetBtn.textContent = '🔄 修正';
+        }
+        showMessage('修正エラーが発生しました', 'error');
+      }
+    }
+
+    // 30種類以上の詳細なバリエーション（v1_backupから復元）
+    const VISUAL_VARIANTS = [
+      {
+        angle: "正面から見上げるローアングル",
+        shot: "全身を捉えた広角ショット",
+        lighting: "逆光でシルエットを強調",
+        mood: "力強さと決意を感じる雰囲気",
+        environment: "都市の高層ビル群を背景に"
+      },
+      {
+        angle: "真上から見下ろす俯瞰",
+        shot: "対象を中心に配置した構図",
+        lighting: "均等に明るい昼光",
+        mood: "静寂で整然とした雰囲気",
+        environment: "開けた広場や公園"
+      },
+      {
+        angle: "斜め45度から見た視点",
+        shot: "上半身をクローズアップ",
+        lighting: "柔らかい自然光が横から",
+        mood: "親しみやすく温かい雰囲気",
+        environment: "カフェやリビングルーム"
+      },
+      {
+        angle: "横から捉えたプロファイル",
+        shot: "人物の横顔をフレームいっぱいに",
+        lighting: "窓からの光がハイライトを作る",
+        mood: "思索的で落ち着いた雰囲気",
+        environment: "書斎や図書館"
+      },
+      {
+        angle: "やや上から見下ろす視点",
+        shot: "テーブル上の作業を捉える",
+        lighting: "デスクライトの温かい光",
+        mood: "集中と創造性を感じる雰囲気",
+        environment: "オフィスや工房"
+      },
+      {
+        angle: "地面すれすれの超ローアングル",
+        shot: "足元から全身を見上げる構図",
+        lighting: "強い影を作る夕日",
+        mood: "ドラマチックで印象的な雰囲気",
+        environment: "屋外の開けた場所"
+      },
+      {
+        angle: "鳥の目線の真上から",
+        shot: "複数人を配置したパターン構図",
+        lighting: "均一な照明で影を最小限に",
+        mood: "協調性とバランスを感じる雰囲気",
+        environment: "会議室やスタジオ"
+      },
+      {
+        angle: "目線の高さでの正面構図",
+        shot: "顔を大きくクローズアップ",
+        lighting: "前方から柔らかく照らす",
+        mood: "親密で感情的な雰囲気",
+        environment: "屋内の自然光が入る場所"
+      },
+      {
+        angle: "下から見上げる迫力ある構図",
+        shot: "建物や物体の威圧感を強調",
+        lighting: "夜間の人工照明",
+        mood: "威厳と力強さを感じる雰囲気",
+        environment: "都市の夜景"
+      },
+      {
+        angle: "斜め後ろからの視点",
+        shot: "背中越しに前方を見る構図",
+        lighting: "前方からの逆光",
+        mood: "冒険心と期待を感じる雰囲気",
+        environment: "自然の中や街の通り"
+      },
+      {
+        angle: "真横からの平面的な視点",
+        shot: "動きを捉えたアクションショット",
+        lighting: "ストロボで動きを凍結",
+        mood: "エネルギッシュで動的な雰囲気",
+        environment: "スポーツ施設や屋外"
+      },
+      {
+        angle: "やや下から煽る構図",
+        shot: "対象の威厳を強調する配置",
+        lighting: "下からの照明で劇的に",
+        mood: "格式と権威を感じる雰囲気",
+        environment: "大理石の建物内部"
+      },
+      {
+        angle: "上から見下ろす俯瞰",
+        shot: "作業中の手元をクローズアップ",
+        lighting: "真上からの明るい照明",
+        mood: "丁寧で繊細な雰囲気",
+        environment: "キッチンや作業台"
+      },
+      {
+        angle: "遠くから望遠で捉える",
+        shot: "人物を風景の一部として",
+        lighting: "自然な昼光",
+        mood: "孤独と静けさを感じる雰囲気",
+        environment: "広大な自然の中"
+      },
+      {
+        angle: "目線より少し高い位置から",
+        shot: "グループ全体を捉えた構図",
+        lighting: "柔らかく均等な照明",
+        mood: "調和と一体感を感じる雰囲気",
+        environment: "集会所や広い室内"
+      },
+      {
+        angle: "斜め上から見下ろす視点",
+        shot: "座っている人物を捉える",
+        lighting: "窓からの自然光",
+        mood: "リラックスした穏やかな雰囲気",
+        environment: "リビングやカフェ"
+      },
+      {
+        angle: "極端なワイドアングル",
+        shot: "空間の広がりを強調",
+        lighting: "明暗差のあるコントラスト",
+        mood: "開放感と広がりを感じる雰囲気",
+        environment: "大きなホールや屋外"
+      },
+      {
+        angle: "接写マクロ的な視点",
+        shot: "細部を大きく捉える",
+        lighting: "ソフトボックスで均一に",
+        mood: "精密さと注意深さを感じる雰囲気",
+        environment: "スタジオや研究室"
+      },
+      {
+        angle: "斜めから捉えた三点透視",
+        shot: "建物や空間の奥行きを強調",
+        lighting: "夕暮れの斜光",
+        mood: "ドラマチックで印象的な雰囲気",
+        environment: "都市の街角"
+      },
+      {
+        angle: "水平線上の目線で",
+        shot: "対称的な構図",
+        lighting: "均等な拡散光",
+        mood: "バランスと調和を感じる雰囲気",
+        environment: "モダンな建築内部"
+      },
+      {
+        angle: "やや下から見上げる構図",
+        shot: "人物の表情をクローズアップ",
+        lighting: "前方からのソフトライト",
+        mood: "希望と前向きさを感じる雰囲気",
+        environment: "明るい室内"
+      },
+      {
+        angle: "真後ろからの視点",
+        shot: "後ろ姿を捉えた構図",
+        lighting: "前方の明るい光に向かって",
+        mood: "旅立ちと期待を感じる雰囲気",
+        environment: "駅や空港"
+      },
+      {
+        angle: "斜め下から煽る構図",
+        shot: "全身を力強く捉える",
+        lighting: "下からのアップライト",
+        mood: "ヒロイックで勇敢な雰囲気",
+        environment: "舞台や演壇"
+      },
+      {
+        angle: "上から見下ろす高所視点",
+        shot: "街並みや風景を一望",
+        lighting: "晴天の自然光",
+        mood: "爽快感と達成感を感じる雰囲気",
+        environment: "高層ビルの屋上"
+      },
+      {
+        angle: "目線より低い位置から",
+        shot: "子供目線の構図",
+        lighting: "柔らかい自然光",
+        mood: "無邪気で純真な雰囲気",
+        environment: "公園や遊び場"
+      },
+      {
+        angle: "正面やや右寄りの視点",
+        shot: "対話シーンを捉える",
+        lighting: "三点照明で立体的に",
+        mood: "親密で対話的な雰囲気",
+        environment: "会議室や対面の場"
+      },
+      {
+        angle: "遠景から広角で捉える",
+        shot: "人物と環境を一体的に",
+        lighting: "ゴールデンアワーの暖色光",
+        mood: "ノスタルジックで情緒的な雰囲気",
+        environment: "田園や海辺"
+      },
+      {
+        angle: "横から捉えた動的構図",
+        shot: "走る姿を流し撮り風に",
+        lighting: "逆光気味のエッジライト",
+        mood: "スピード感と躍動を感じる雰囲気",
+        environment: "道路やトラック"
+      },
+      {
+        angle: "斜め上からの鳥瞰",
+        shot: "複雑な配置を整理して見せる",
+        lighting: "明るく均一な照明",
+        mood: "整然とした秩序を感じる雰囲気",
+        environment: "工場や倉庫"
+      },
+      {
+        angle: "極端なローアングルから",
+        shot: "空と対象を対比させる構図",
+        lighting: "逆光でシルエット化",
+        mood: "壮大さと自由を感じる雰囲気",
+        environment: "開けた野外"
+      }
+    ];
+
+    let usedVariantIndices = [];
+    
+    function resetUsedVariants() {
+      usedVariantIndices = [];
+    }
+    
+    function getUniqueVariant() {
+      if (usedVariantIndices.length >= VISUAL_VARIANTS.length) {
+        resetUsedVariants();
+      }
+      
+      let attempts = 0;
+      let index;
+      
+      do {
+        index = Math.floor(Math.random() * VISUAL_VARIANTS.length);
+        attempts++;
+      } while (usedVariantIndices.includes(index) && attempts < 50);
+      
+      usedVariantIndices.push(index);
+      return VISUAL_VARIANTS[index];
+    }
+
+    // 自動修正指示を生成
+    function generateAutoInstructions(originalPrompt) {
+      const variant = getUniqueVariant();
+      
+      return `${variant.angle}で、${variant.shot}。${variant.lighting}を使い、${variant.mood}で、${variant.environment}の設定で修正してください。`;
     }
 
     // 初期化
