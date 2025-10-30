@@ -349,25 +349,19 @@ class ImageGeneratorV2 {
     const styleText = this.styleMap[style] || `スタイル:${style}`;
     const scope = chunkTitle || chunk?.heading || title || "記事内容";
 
-    // 言語別安全性ガイドライン
-    const safetyGuidelines = this.buildSafetyGuidelines(regionInfo);
-
     const timeContext = regionInfo.historical?.isHistorical 
       ? `歴史的時代設定: ${regionInfo.historical.era}時代`
       : regionInfo.era;
 
+    // 簡潔な画像生成用プロンプト（記事本文とガイドライン除外）
     return [
-      safetyGuidelines,
-      `アイキャッチ用イラストを生成`,
-      `対象: ${scope}`,
-      `比率: ${ratioLabel}`,
+      `${scope}をテーマにしたアイキャッチ用イラストを生成`,
       `スタイル: ${styleText}`,
+      `比率: ${ratioLabel}`,
       `地域・文化: ${regionInfo.region}`,
       `時代設定: ${timeContext}`,
-      `文化的配慮: ${regionInfo.style}`,
-      `本文:`,
-      body,
-    ].join("\n");
+      `文化的配慮: ${regionInfo.style}`
+    ].join("。");
   }
 
   buildSafetyGuidelines(regionInfo) {
@@ -579,7 +573,7 @@ ${content}
 
   async generateImages(content, options = {}) {
     try {
-      const { taste = 'photo', aspectRatio = '1:1', maxImages = 3 } = options;
+      const { taste = 'photo', aspectRatio = '1:1', maxImages = 5 } = options;
       
       console.log(`[imageGen] Starting enhanced generation`);
       console.log(`[imageGen] - Style: ${taste} (mapped: ${this.styleMap[taste] || 'unknown'})`);
