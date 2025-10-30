@@ -1,4 +1,5 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import { Buffer } from 'buffer';
 
 class ImageGeneratorV2 {
   constructor() {
