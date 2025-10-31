@@ -278,7 +278,15 @@ ${content}
 
       // 記事内容を含めたプロンプト生成
       const articleContent = chunk.text.substring(0, 200); // 最初の200文字
-      const systemPrompt = `記事内容: ${articleContent}\n\n上記内容の画像プロンプトを30文字以内で生成。スタイル: ${styleGuides[style] || styleGuides.modern}`;
+      const systemPrompt = `記事内容: ${articleContent}
+
+上記の日本の記事内容を表現する画像プロンプトを英語で生成してください。
+条件:
+- 日本人の人物を含める
+- 記事の具体的なシーンを描写
+- 文字やテキストは一切含めない
+- ${styleGuides[style] || styleGuides.modern}スタイル
+- 50文字以内の英語で記述`;
 
       console.log(`[imageGen] DEBUG - Chunk text:`, chunk.text);
       console.log(`[imageGen] DEBUG - Article content:`, articleContent);
@@ -308,7 +316,7 @@ ${content}
       .replace(/[^\w\s\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]/g, ' ')
       .split(' ')
       .filter(w => w.length > 2)
-      .slice(0, 5)
+      .slice(0, 4)
       .join(' ');
 
     const styleMap = {
@@ -326,7 +334,8 @@ ${content}
     const headingKeywords = heading ? heading.replace(/[^\w\s\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]/g, ' ').split(' ').filter(w => w.length > 1).slice(0, 2).join(' ') : '';
     const allKeywords = [headingKeywords, keywords].filter(k => k).join(' ');
 
-    return `${allKeywords}, ${styleMap[style] || 'professional'}, high quality illustration`;
+    // 日本人と具体的なシーンを含む、より詳細なプロンプト
+    return `Japanese person, ${allKeywords}, realistic scene, no text, no letters, ${styleMap[style] || 'professional'}, high quality illustration`;
   }
 
   // Google Gemini 2.5 Flashによる実際の画像生成
