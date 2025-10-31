@@ -812,22 +812,57 @@ Focus on accuracy and relevance to the source material with proper Japanese cult
   async buildRegeneratePrompt(originalPrompt, instructions, style) {
     if (this.openaiApiKey) {
       try {
-        const systemPrompt = `Modify the image prompt based on user instructions.
-Keep the core scene but apply the requested changes.`;
+        const systemPrompt = `You are an expert at modifying image generation prompts based on user feedback.
 
-        const userPrompt = `Original: ${originalPrompt}\nChanges: ${instructions}\nStyle: ${style}`;
+TASK: Take the original image prompt and the user's modification request, then create a new, specific image generation prompt.
+
+REQUIREMENTS:
+1. Maintain the core visual elements from the original prompt
+2. Apply the user's requested changes/improvements
+3. Keep all technical specifications (style, "no text, no letters", etc.)
+4. Ensure the result is a concrete, specific image generation prompt
+5. **CRITICAL: Always maintain Japanese cultural context for Japanese content**
+6. Include "Japanese person/people" when describing people
+7. Specify Japanese settings and cultural elements
+
+OUTPUT: Return ONLY the modified image generation prompt, nothing else.
+
+EXAMPLE:
+Original: "Japanese person at office desk, touching shoulder in discomfort, modern Japanese office, photorealistic photograph, no text, no letters"
+User request: "Make the lighting warmer and add more office details"
+Output: "Japanese person at office desk, touching shoulder in discomfort, warm lighting, detailed modern Japanese office with computers and documents, photorealistic photograph, no text, no letters"`;
+
+        const userPrompt = `Original prompt: ${originalPrompt}
+User's modification request: ${instructions}
+Style: ${style}
+
+Create a modified image generation prompt:`;
         
         const response = await this.callOpenAI(systemPrompt, userPrompt);
         if (response && response.length > 30) {
-          return response.trim();
+          // プロンプト検証
+          if (this.validatePrompt(response)) {
+            return response.trim();
+          } else {
+            console.warn('[imageGen] Regenerated prompt failed validation, using fallback');
+          }
         }
       } catch (error) {
         console.warn('[imageGen] Regenerate prompt failed:', error.message);
       }
     }
     
-    // フォールバック
-    return `${originalPrompt}, modified: ${instructions}, no text, no letters`;
+    // フォールバック：より具体的な修正
+    const styleGuides = {
+      photo: 'photorealistic photograph',
+      deformed: 'cute anime chibi style', 
+      watercolor: 'watercolor painting',
+      detailed: 'detailed illustration',
+      pictogram: 'simple pictogram icon'
+    };
+    
+    const basePrompt = originalPrompt.replace(/,\s*no text.*$/, ''); // 既存の技術仕様を削除
+    return `${basePrompt}, modified with: ${instructions}, ${styleGuides[style] || 'photorealistic photograph'}, no text, no letters`;
   }
 }
 
