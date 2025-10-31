@@ -310,28 +310,53 @@ ${content}
       const scope = chunk.heading || '記事内容';
 
       // 記事内容を含めたプロンプト生成
-      const articleContent = chunk.text.substring(0, 200); // 最初の200文字
-      const systemPrompt = `記事内容: ${articleContent}
+      // チャンク全体を使用（最大500文字まで）
+      const articleContent = chunk.text.substring(0, 500); 
+      const chunkSummary = chunk.heading ? `【${chunk.heading}】` : '【本文】';
+      
+      // 見出しによって異なるプロンプト指示を生成
+      let contextHint = '';
+      if (chunk.heading) {
+        const heading = chunk.heading.toLowerCase();
+        if (heading.includes('はじめ') || heading.includes('導入') || heading.includes('症状')) {
+          contextHint = '痛みに苦しむ瞬間を表現';
+        } else if (heading.includes('危険') || heading.includes('リスク') || heading.includes('放置')) {
+          contextHint = '深刻な表情で警告的な雰囲気';
+        } else if (heading.includes('方法') || heading.includes('着替え') || heading.includes('姿勢')) {
+          contextHint = '正しい動作を実践している様子';
+        } else if (heading.includes('ケア') || heading.includes('ストレッチ') || heading.includes('ほぐす')) {
+          contextHint = 'ストレッチや体操をしている様子';
+        } else if (heading.includes('まとめ') || heading.includes('結論') || heading.includes('改善')) {
+          contextHint = '改善して明るい表情';
+        }
+      }
+      
+      const systemPrompt = `${chunkSummary}
+${articleContent}
 
-上記の記事内容を表現する画像生成プロンプトを英語で作成してください。
+上記の記事セクションの内容を表現する画像生成プロンプトを英語で作成してください。
+${contextHint ? `特に「${contextHint}」を意識して。` : ''}
 
 参考例（この形式で記事内容に合わせて作成）:
-- "Middle-aged Japanese man worried expression, back pain, calm colors"
-- "Young Japanese woman bad posture, shoulder stiffness, cluttered desk"  
-- "Japanese person relaxed expression, health recovery, calm atmosphere"
-- "Japanese man bright expression, stretching at home, healthy impression"
+- "Middle-aged Japanese woman shoulder pain putting on sweater, worried face"
+- "Japanese woman incorrect posture warning, serious expression"
+- "Japanese woman proper dressing technique, helpful demonstration"
+- "Japanese woman doing shoulder stretches, focused expression"
+- "Japanese woman happy after recovery, bright smile"
 
 要求:
-- 記事内容に基づく適切な日本人の人物（年齢・性別）
-- 具体的な状況・感情・表情を含める
-- 雰囲気や背景設定も含める
+- この記事セクションの具体的な内容を反映
+- 日本人の人物（記事に合った年齢・性別）
+- セクションの内容に応じた感情・表情・動作
 - 文字やテキストは絶対に含めない
 - ${styleGuides[style] || styleGuides.modern}スタイル
-- 英語で50文字程度`;
+- 英語で70文字程度`;
 
-      console.log(`[imageGen] DEBUG - Chunk text:`, chunk.text);
-      console.log(`[imageGen] DEBUG - Article content:`, articleContent);
-      console.log(`[imageGen] DEBUG - System prompt:`, systemPrompt);
+      console.log(`[imageGen] DEBUG - Chunk ${chunk.index} heading:`, chunk.heading);
+      console.log(`[imageGen] DEBUG - Context hint:`, contextHint);
+      console.log(`[imageGen] DEBUG - Chunk text:`, chunk.text.substring(0, 100) + '...');
+      console.log(`[imageGen] DEBUG - Article content:`, articleContent.substring(0, 100) + '...');
+      console.log(`[imageGen] DEBUG - System prompt:`, systemPrompt.substring(0, 200) + '...');
 
       const result = await this.geminiModel.generateContent(systemPrompt);
       const geminiResponse = result.response;
