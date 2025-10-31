@@ -346,6 +346,20 @@ class SecureDatabase {
     }
   }
 
+  // デバッグ用: 特定メールの認証コード一覧取得
+  async getAuthCodesForEmail(email) {
+    const emailHash = this.hashEmail(email);
+    const codes = await this.all(
+      'SELECT id, email_hash, code_hash, expires_at, used, attempts, created_at FROM auth_codes WHERE email_hash = ? ORDER BY created_at DESC',
+      [emailHash]
+    );
+    return codes.map(code => ({
+      ...code,
+      email: email, // 元のメールアドレスを追加
+      expired: new Date(code.expires_at) < new Date()
+    }));
+  }
+
   async getLastCodeRequest(email) {
     const emailHash = this.hashEmail(email);
     return await this.get(

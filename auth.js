@@ -136,11 +136,15 @@ class EmailAuthenticator {
       const code = this.generateAuthCode();
       const expiresAt = new Date(Date.now() + this.codeExpiry).toISOString();
       
+      console.log(`[auth] Generated code for ${email}: ${code} (expires: ${expiresAt})`);
+      
       // データベースに保存
       const codeId = await this.db.saveAuthCode(email, code, expiresAt, ipAddress, userAgent);
+      console.log(`[auth] Code saved to database with ID: ${codeId}`);
       
       // メール送信
       await this.sendAuthCodeEmail(email, code);
+      console.log(`[auth] Email sent to: ${email}`);
       
       // セキュリティログ
       const user = await this.db.getUserByEmail(email);
@@ -225,6 +229,11 @@ class EmailAuthenticator {
 
       // 認証コード検証
       console.log(`[auth] Starting code verification for email: ${email}, code: ${code}`);
+      
+      // デバッグ: データベース内の認証コードを確認
+      const existingCodes = await this.db.getAuthCodesForEmail(email);
+      console.log(`[auth] Existing codes for ${email}:`, existingCodes);
+      
       const verification = await this.db.verifyAuthCode(email, code);
       console.log(`[auth] Code verification result:`, verification);
       
