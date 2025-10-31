@@ -363,6 +363,19 @@
 
     <div class="form-section">
       <h2>📝 画像生成</h2>
+      <div style="background: #fff3cd; border: 1px solid #ffc107; border-radius: 8px; padding: 12px; margin-bottom: 20px; color: #856404;">
+        <strong>⚠️ 使用制限</strong><br>
+        <span style="font-size: 14px;">
+          • 画像生成: 1日3記事まで<br>
+          • 画像再生成: 1日10回まで<br>
+          • 制限は毎日リセットされます
+        </span>
+        <div id="usageStatus" style="margin-top: 10px; font-size: 14px; display: none;">
+          <strong>本日の使用状況:</strong><br>
+          記事生成: <span id="articleUsage">0/3</span><br>
+          再生成: <span id="regenerationUsage">0/10</span>
+        </div>
+      </div>
       <div class="form-group">
         <label for="content">記事の内容</label>
         <textarea 
@@ -441,6 +454,43 @@
     }
 
     // ユーザー情報取得
+    // 使用状況を取得
+    async function getUsageStats() {
+      const token = localStorage.getItem('access_token');
+      
+      try {
+        const xhr = new XMLHttpRequest();
+        xhr.open('GET', `${BACKEND}/api/usage/stats`, true);
+        xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+        
+        xhr.onload = function() {
+          if (xhr.status === 200) {
+            const data = JSON.parse(xhr.responseText);
+            
+            // 使用状況を表示
+            const usageDiv = document.getElementById('usageStatus');
+            const articleUsage = document.getElementById('articleUsage');
+            const regenerationUsage = document.getElementById('regenerationUsage');
+            
+            if (usageDiv && articleUsage && regenerationUsage) {
+              const articleCount = data.usage?.articleCount || 0;
+              const regenerationCount = data.usage?.regenerationCount || 0;
+              const articleLimit = data.limits?.articles || 3;
+              const regenerationLimit = data.limits?.regenerations || 10;
+              
+              articleUsage.textContent = `${articleCount}/${articleLimit === -1 ? '無制限' : articleLimit}`;
+              regenerationUsage.textContent = `${regenerationCount}/${regenerationLimit === -1 ? '無制限' : regenerationLimit}`;
+              usageDiv.style.display = 'block';
+            }
+          }
+        };
+        
+        xhr.send();
+      } catch (error) {
+        console.error('使用状況取得エラー:', error);
+      }
+    }
+
     async function getUserInfo() {
       const token = localStorage.getItem('access_token');
       console.log('👤 ユーザー情報取得開始...');
@@ -551,6 +601,7 @@
             if (data.images && data.images.length > 0) {
               displayImages(data.images);
               showMessage(`${data.images.length}枚の画像を生成しました！`, 'success');
+              getUsageStats();  // 使用状況を更新
             } else {
               showMessage('画像の生成に失敗しました', 'error');
             }
@@ -814,6 +865,7 @@
               originalImages[imageIndex] = data.image;
               displayImages(originalImages);
               showMessage(`画像 ${imageIndex + 1} を修正しました！`, 'success');
+              getUsageStats();  // 使用状況を更新
             } else {
               showMessage(data.message || '修正に失敗しました', 'error');
             }
@@ -1106,6 +1158,7 @@
       
       console.log('✅ 認証チェック通過 - アプリ初期化開始');
       getUserInfo();
+      getUsageStats();  // 使用状況を取得
       
       // 文字数カウント
       document.getElementById('content').addEventListener('input', updateCharCount);
