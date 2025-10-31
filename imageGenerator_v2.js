@@ -544,13 +544,19 @@ ${chunk.text}
       try {
         const systemPrompt = `あなたは日本語の場面描写を英語の画像生成プロンプトに変換する専門家です。
 
+重要原則：
+1. 元の日本語文章の内容を正確に忠実に反映する
+2. 記事の文脈や意図を維持する
+3. 記事で明示されていない情報は勝手に補完しない
+4. 不必要な装飾や推測は加えない
+
 要求:
-- 日本人の人物を必ず含める
-- 場面の具体的な動作・表情・状況を表現
+- 日本人の人物を必ず含める（記事内容に応じて）
+- 場面の具体的な動作・表情・状況を忠実に表現
 - 文字やテキストは絶対に含めない（no text, no letters を必ず含める）
 - スタイル指定: ${styleGuides[style] || styleGuides.photo}
 - 英語で100文字程度
-- 自然で具体的な描写にする
+- 元の文章に忠実で具体的な描写
 - スタイルに応じた質感や表現を含める
 
 スタイル別要求:
@@ -565,16 +571,31 @@ ${chunk.text}
 
         const userPrompt = `以下の日本語の場面を英語の画像生成プロンプトに変換してください。
 
-【場面】
+【記事の場面】
 ${sceneText}
 
-日本人の人物を含む具体的で自然な英語プロンプトを70文字程度で作成してください。`;
+【スタイル】
+${style}
+
+必ず以下を含めて英語プロンプトを120文字程度で作成してください：
+- 記事内容に忠実な人物・状況描写
+- 場面の具体的な動作・表情（記事から）
+- ${styleGuides[style] || styleGuides.photo}
+- "no text, no letters"
+- 記事の内容から逸脱しない描写`;
 
         const response = await this.callOpenAI(systemPrompt, userPrompt);
         let prompt = response?.trim() || '';
         
-        if (prompt.length > 80) {
-          prompt = prompt.substring(0, 80);
+        // 不完全なプロンプトの場合はフォールバックを強制
+        if (!prompt || prompt.length < 30 || !prompt.includes('no text')) {
+          console.warn('[imageGen] Incomplete GPT prompt, using fallback');
+          return this.generateMockPrompt(sceneText, style, null);
+        }
+        
+        // 長すぎる場合は適切に切り詰める
+        if (prompt.length > 150) {
+          prompt = prompt.substring(0, 150);
         }
         
         return prompt;
@@ -599,37 +620,37 @@ ${sceneText}
       pictogram: 'simple pictogram style, minimalist icon design, clean symbols, infographic style'
     };
 
-    // チャンクタイプに基づくシーン生成
+    // チャンクタイプに基づくシーン生成（記事内容重視）
     const sceneTemplates = {
       introduction: {
-        scene: 'Japanese woman morning routine putting on knit sweater',
-        action: 'raising arms with sudden pain',
-        emotion: 'surprised painful expression',
-        setting: 'bedroom morning light'
+        scene: 'Japanese woman putting on knit sweater',
+        action: 'raising arms with sudden shoulder pain',
+        emotion: 'surprised expression from pain',
+        setting: 'simple indoor setting'
       },
       warning: {
-        scene: 'Japanese woman showing shoulder muscle anatomy concern',
-        action: 'touching shoulder with worry',
-        emotion: 'serious concerned expression',
-        setting: 'medical consultation room'
+        scene: 'Japanese woman examining shoulder',
+        action: 'touching and checking shoulder joint',
+        emotion: 'concerned expression',
+        setting: 'indoor environment'
       },
       technique: {
-        scene: 'Japanese woman demonstrating proper dressing technique',
-        action: 'careful arm movement demonstration',
-        emotion: 'instructional focused expression',
-        setting: 'bright home interior'
+        scene: 'Japanese woman demonstrating proper clothing technique',
+        action: 'careful arm movement while dressing',
+        emotion: 'focused expression',
+        setting: 'simple indoor space'
       },
       exercise: {
-        scene: 'Japanese woman doing shoulder stretches',
-        action: 'gentle stretching exercise',
-        emotion: 'concentrated peaceful expression',
-        setting: 'exercise mat home'
+        scene: 'Japanese woman doing shoulder exercises',
+        action: 'gentle shoulder stretches and movements',
+        emotion: 'concentrated expression',
+        setting: 'indoor space'
       },
       conclusion: {
-        scene: 'Japanese woman happy after successful recovery',
-        action: 'easy comfortable arm movement',
-        emotion: 'bright satisfied smile',
-        setting: 'sunny home environment'
+        scene: 'Japanese woman with improved shoulder condition',
+        action: 'comfortable arm movement while dressing',
+        emotion: 'relieved expression',
+        setting: 'indoor environment'
       }
     };
 
@@ -653,28 +674,18 @@ ${sceneText}
       }
     }
 
-    // より多様性のためのランダム要素
-    const variations = {
-      age: ['young', 'middle-aged'],
-      pose: ['sitting', 'standing'],
-      lighting: ['soft natural light', 'warm indoor lighting', 'bright daylight']
-    };
-    
-    const randomAge = variations.age[Math.floor(Math.random() * variations.age.length)];
-    const randomLighting = variations.lighting[Math.floor(Math.random() * variations.lighting.length)];
-
-    // スタイル別の追加指示
+    // スタイル別の基本指示
     const styleInstructions = {
-      photo: 'professional studio lighting, sharp focus, Canon EOS camera style',
-      deformed: 'anime chibi style, large eyes, cute proportions, simple features',
-      watercolor: 'soft brush strokes, watercolor paper texture, artistic painting style',
-      detailed: 'intricate details, fine linework, hyperrealistic illustration',
-      pictogram: 'simple geometric shapes, clean lines, minimalist design, icon style'
+      photo: 'natural lighting, realistic',
+      deformed: 'cute style, simple features',
+      watercolor: 'watercolor texture, artistic style',
+      detailed: 'detailed illustration',
+      pictogram: 'simple design, clean lines'
     };
 
-    // 完全英語プロンプト生成（スタイル強化）
+    // 記事内容に忠実なプロンプト生成
     const styleInstruction = styleInstructions[style] || styleInstructions.photo;
-    return `${randomAge} ${sceneData.scene}, ${sceneData.action}, ${sceneData.emotion}, ${sceneData.setting}, ${randomLighting}, ${styleMap[style] || 'professional'}, ${styleInstruction}, no text, no letters, high quality`;
+    return `${sceneData.scene}, ${sceneData.action}, ${sceneData.emotion}, ${sceneData.setting}, ${styleMap[style] || 'professional'}, ${styleInstruction}, no text, no letters, high quality`;
   }
 
   // Google Gemini 2.5 Flashによる実際の画像生成
@@ -871,6 +882,8 @@ Generate an optimized image generation prompt:`;
       const images = [];
       for (const chunk of chunks) {
         const prompt = await this.generateImagePrompt(chunk, taste, aspectRatio);
+        console.log(`[imageGen] 🎨 Generated prompt for chunk ${chunk.index}:`, prompt);
+        console.log(`[imageGen] 📝 Chunk content preview:`, chunk.text?.substring(0, 100));
         
         // 実際のAI画像生成を試行
         const realImage = await this.generateRealImage(prompt, aspectRatio);
