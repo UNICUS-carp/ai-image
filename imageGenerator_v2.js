@@ -808,51 +808,61 @@ Focus on accuracy and relevance to the source material with proper Japanese cult
     }
   }
 
-  // 再生成プロンプト作成
+  // 視覚的バリエーションプロンプト（30種類）
+  getVisualVariations() {
+    return [
+      // カメラアングル・構図
+      "close-up shot, shallow depth of field",
+      "wide shot, full scene visible", 
+      "medium shot, balanced composition",
+      "low angle view, dramatic perspective",
+      "high angle view, bird's eye perspective",
+      "side profile view, artistic composition",
+      "over-the-shoulder perspective",
+      "three-quarter view angle",
+      
+      // 照明
+      "warm golden hour lighting, soft shadows",
+      "cool morning light, crisp atmosphere", 
+      "dramatic side lighting, strong contrast",
+      "soft diffused lighting, even illumination",
+      "natural window light, gentle ambiance",
+      "warm indoor lighting, cozy atmosphere",
+      "bright daylight, clear visibility",
+      "sunset lighting, warm orange tones",
+      
+      // 色調・トーン
+      "vibrant colors, high saturation",
+      "muted pastel tones, soft palette",
+      "monochromatic color scheme, subtle variations",
+      "high contrast, bold visual impact",
+      "warm color temperature, inviting mood",
+      "cool color temperature, calm mood",
+      "sepia tones, vintage feel",
+      "bright and airy, light atmosphere",
+      
+      // 背景・環境の詳細
+      "detailed background elements, rich environment",
+      "minimalist background, focus on subject",
+      "blurred background, bokeh effect",
+      "textured surfaces, tactile details",
+      "clean modern environment, sleek design",
+      "traditional Japanese elements in background"
+    ];
+  }
+
+  // 再生成プロンプト作成（元の仕様に戻す）
   async buildRegeneratePrompt(originalPrompt, instructions, style) {
-    if (this.openaiApiKey) {
-      try {
-        const systemPrompt = `You are an expert at modifying image generation prompts based on user feedback.
-
-TASK: Take the original image prompt and the user's modification request, then create a new, specific image generation prompt.
-
-REQUIREMENTS:
-1. Maintain the core visual elements from the original prompt
-2. Apply the user's requested changes/improvements
-3. Keep all technical specifications (style, "no text, no letters", etc.)
-4. Ensure the result is a concrete, specific image generation prompt
-5. **CRITICAL: Always maintain Japanese cultural context for Japanese content**
-6. Include "Japanese person/people" when describing people
-7. Specify Japanese settings and cultural elements
-
-OUTPUT: Return ONLY the modified image generation prompt, nothing else.
-
-EXAMPLE:
-Original: "Japanese person at office desk, touching shoulder in discomfort, modern Japanese office, photorealistic photograph, no text, no letters"
-User request: "Make the lighting warmer and add more office details"
-Output: "Japanese person at office desk, touching shoulder in discomfort, warm lighting, detailed modern Japanese office with computers and documents, photorealistic photograph, no text, no letters"`;
-
-        const userPrompt = `Original prompt: ${originalPrompt}
-User's modification request: ${instructions}
-Style: ${style}
-
-Create a modified image generation prompt:`;
-        
-        const response = await this.callOpenAI(systemPrompt, userPrompt);
-        if (response && response.length > 30) {
-          // プロンプト検証
-          if (this.validatePrompt(response)) {
-            return response.trim();
-          } else {
-            console.warn('[imageGen] Regenerated prompt failed validation, using fallback');
-          }
-        }
-      } catch (error) {
-        console.warn('[imageGen] Regenerate prompt failed:', error.message);
-      }
-    }
+    console.log(`[imageGen] Building regeneration prompt from: "${originalPrompt}"`);
     
-    // フォールバック：より具体的な修正
+    // 元のプロンプトから技術仕様を分離
+    const basePrompt = originalPrompt.replace(/,\s*(photorealistic|cute anime|watercolor|detailed|simple).*?,\s*no text.*$/i, '').trim();
+    
+    // ランダムに視覚的バリエーションを選択
+    const variations = this.getVisualVariations();
+    const randomVariation = variations[Math.floor(Math.random() * variations.length)];
+    
+    // スタイル指定
     const styleGuides = {
       photo: 'photorealistic photograph',
       deformed: 'cute anime chibi style', 
@@ -861,8 +871,13 @@ Create a modified image generation prompt:`;
       pictogram: 'simple pictogram icon'
     };
     
-    const basePrompt = originalPrompt.replace(/,\s*no text.*$/, ''); // 既存の技術仕様を削除
-    return `${basePrompt}, modified with: ${instructions}, ${styleGuides[style] || 'photorealistic photograph'}, no text, no letters`;
+    // 組み合わせて新しいプロンプトを作成
+    const newPrompt = `${basePrompt}, ${randomVariation}, ${styleGuides[style] || 'photorealistic photograph'}, no text, no letters`;
+    
+    console.log(`[imageGen] Selected variation: "${randomVariation}"`);
+    console.log(`[imageGen] Generated regeneration prompt: "${newPrompt}"`);
+    
+    return newPrompt;
   }
 }
 
