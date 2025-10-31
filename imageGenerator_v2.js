@@ -377,43 +377,81 @@ Rules:
     }
   }
 
-  // Gemini画像生成
+  // Gemini画像生成（修正版）
   async generateImageWithGemini(prompt, aspectRatio = '1:1') {
     if (!this.geminiApiKey) return null;
 
+    // 方法1: Imagen 3を試行
     try {
       const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key=${this.geminiApiKey}`,
+        `https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-001:generateImage?key=${this.geminiApiKey}`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            contents: [{
-              parts: [{
-                text: `Generate an image: ${prompt}\nAspect ratio: ${aspectRatio}`
-              }]
-            }],
-            generationConfig: {
-              temperature: 0.9,
-              maxOutputTokens: 8192,
-              responseMimeType: "image/png"
+            prompt: prompt,
+            config: {
+              aspectRatio: aspectRatio,
+              safetyFilterLevel: "BLOCK_ONLY_HIGH",
+              personGeneration: "ALLOW_ADULT"
             }
           })
         }
       );
 
-      if (!response.ok) {
-        throw new Error(`Gemini API error: ${response.status}`);
-      }
-
-      const data = await response.json();
-      if (data.candidates?.[0]?.content?.parts?.[0]?.text) {
-        return `data:image/png;base64,${data.candidates[0].content.parts[0].text}`;
+      if (response.ok) {
+        const data = await response.json();
+        console.log('[imageGen] Imagen 3 response:', Object.keys(data));
+        
+        if (data.generatedImages && data.generatedImages.length > 0) {
+          const imageData = data.generatedImages[0];
+          if (imageData.bytesBase64Encoded) {
+            console.log('[imageGen] ✅ Imagen 3 success');
+            return `data:image/png;base64,${imageData.bytesBase64Encoded}`;
+          }
+        }
+      } else {
+        console.warn('[imageGen] Imagen 3 failed:', response.status);
       }
     } catch (error) {
-      console.error('[imageGen] Gemini generation error:', error);
+      console.warn('[imageGen] Imagen 3 error:', error.message);
     }
 
+    // 方法2: 古いImagenAPIを試行
+    try {
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/imagegeneration-004:generateImage?key=${this.geminiApiKey}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            prompt: prompt,
+            config: {
+              aspectRatio: aspectRatio
+            }
+          })
+        }
+      );
+
+      if (response.ok) {
+        const data = await response.json();
+        console.log('[imageGen] Legacy Imagen response:', Object.keys(data));
+        
+        if (data.generatedImages && data.generatedImages.length > 0) {
+          const imageData = data.generatedImages[0];
+          if (imageData.bytesBase64Encoded) {
+            console.log('[imageGen] ✅ Legacy Imagen success');
+            return `data:image/png;base64,${imageData.bytesBase64Encoded}`;
+          }
+        }
+      } else {
+        console.warn('[imageGen] Legacy Imagen failed:', response.status);
+      }
+    } catch (error) {
+      console.warn('[imageGen] Legacy Imagen error:', error.message);
+    }
+
+    console.error('[imageGen] All Gemini methods failed');
     return null;
   }
 
@@ -443,16 +481,19 @@ Rules:
         .replace(/'/g, '&apos;');
     };
     
-    const title = escapeXml(chunk.heading || `Scene ${chunk.index + 1}`);
+    const title = escapeXml(chunk.heading || `画像 ${chunk.index + 1}`);
     const safeStyle = escapeXml(style);
     
     const svgContent = `<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
         <rect fill="${bgColor}" width="${width}" height="${height}"/>
-        <text x="50%" y="45%" font-family="Arial" font-size="48" fill="white" text-anchor="middle">
+        <text x="50%" y="40%" font-family="Arial" font-size="36" fill="white" text-anchor="middle">
           ${title}
         </text>
-        <text x="50%" y="55%" font-family="Arial" font-size="24" fill="white" text-anchor="middle">
-          Style: ${safeStyle}
+        <text x="50%" y="50%" font-family="Arial" font-size="18" fill="white" text-anchor="middle">
+          画像生成中...
+        </text>
+        <text x="50%" y="60%" font-family="Arial" font-size="14" fill="white" text-anchor="middle">
+          スタイル: ${safeStyle}
         </text>
       </svg>`;
     
