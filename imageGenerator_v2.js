@@ -227,11 +227,18 @@ RULES:
 5. If the text is about health/medical topics, focus on people in relevant settings (clinic, home, office)
 6. If the text is about technology, focus on people using devices or technology environments
 7. Be specific about the person's activity, expression, and setting
-8. Return a clear, concrete visual description in English
+8. **IMPORTANT: For Japanese text content, always specify Japanese people, Japanese settings, and culturally appropriate elements**
+9. Return a clear, concrete visual description in English
 
 EXAMPLE:
 Input: "肩こりの治療について説明します"
-Output: "A person sitting at a desk showing signs of shoulder discomfort, in an office environment"
+Output: "A Japanese person sitting at a desk showing signs of shoulder discomfort, in a modern Japanese office environment"
+
+CULTURAL SPECIFICATIONS:
+- People: Always specify "Japanese person" or "Japanese people"
+- Settings: Use Japanese contexts (Japanese office, Japanese home, Japanese clinic, etc.)
+- Objects: Include culturally appropriate items when relevant
+- Clothing: Consider typical Japanese business or casual attire
 
 NOT: "A lion in the savanna" (completely unrelated)`;
 
@@ -262,26 +269,26 @@ Extract a specific visual scene that directly relates to this content:`;
     
     // 健康・医療関連
     if (text.includes('肩こり') || text.includes('痛み') || text.includes('治療') || text.includes('マッサージ')) {
-      return 'A person in a medical or wellness setting, showing signs of discomfort in neck/shoulder area, seeking relief';
+      return 'A Japanese person in a medical or wellness setting, showing signs of discomfort in neck/shoulder area, seeking relief in a Japanese clinic or wellness center';
     }
     
     // 温泉・リラクゼーション関連
     if (text.includes('温泉') || text.includes('リラックス') || text.includes('癒し')) {
-      return 'A person relaxing in a spa or hot spring environment, surrounded by natural elements';
+      return 'A Japanese person relaxing in a traditional Japanese spa or hot spring environment, surrounded by natural elements typical of Japanese onsen';
     }
     
     // オフィス・仕事関連
     if (text.includes('デスク') || text.includes('仕事') || text.includes('オフィス') || text.includes('パソコン')) {
-      return 'A person working at a desk in an office environment, showing signs of workplace stress';
+      return 'A Japanese person working at a desk in a modern Japanese office environment, showing signs of workplace stress, wearing typical Japanese business attire';
     }
     
     // 日常生活関連
     if (text.includes('日常') || text.includes('生活') || text.includes('習慣')) {
-      return 'A person in a home environment performing daily activities';
+      return 'A Japanese person in a Japanese home environment performing daily activities, with typical Japanese interior elements';
     }
     
     // デフォルト：一般的な人物シーン
-    return 'A person in a modern indoor setting, natural lighting, everyday environment';
+    return 'A Japanese person in a modern Japanese indoor setting, natural lighting, contemporary Japanese environment';
   }
 
   // プロンプト生成（汎用的）
@@ -308,12 +315,19 @@ REQUIREMENTS:
 5. Be highly specific about setting, people, objects, and actions
 6. Maintain direct relevance to the original scene
 7. Use clear, descriptive language
+8. **CRITICAL: Always maintain Japanese cultural context - specify "Japanese person/people", Japanese settings, and appropriate Japanese elements**
 
 EXAMPLE:
-Input: "A person sitting at a desk showing signs of shoulder discomfort, in an office environment"
-Output: "Person at office desk, touching shoulder in discomfort, indoor lighting, ${styleGuides[style]}, no text, no letters"
+Input: "A Japanese person sitting at a desk showing signs of shoulder discomfort, in a modern Japanese office environment"
+Output: "Japanese person at office desk, touching shoulder in discomfort, modern Japanese office, ${styleGuides[style]}, no text, no letters"
 
-Focus on accuracy and relevance to the source material.`;
+CULTURAL REQUIREMENTS:
+- Always include "Japanese" when describing people
+- Specify Japanese contexts for settings (Japanese office, Japanese home, etc.)
+- Include cultural elements like Japanese business attire, traditional or modern Japanese interiors
+- Avoid generic Western settings or people
+
+Focus on accuracy and relevance to the source material with proper Japanese cultural representation.`;
 
         const userPrompt = `Convert to image prompt:\n${sceneText}`;
         
@@ -350,8 +364,8 @@ Focus on accuracy and relevance to the source material.`;
       return false;
     }
     
-    // 人物や環境要素の存在をチェック（より良い関連性のため）
-    const goodElements = ['person', 'people', 'office', 'desk', 'home', 'indoor', 'sitting', 'standing', 'working', 'medical', 'spa', 'wellness'];
+    // 人物や環境要素の存在をチェック（日本文化要素を含む）
+    const goodElements = ['person', 'people', 'office', 'desk', 'home', 'indoor', 'sitting', 'standing', 'working', 'medical', 'spa', 'wellness', 'japanese'];
     const hasRelevantElements = goodElements.some(element => lowerPrompt.includes(element));
     
     if (!hasRelevantElements) {
@@ -378,10 +392,22 @@ Focus on accuracy and relevance to the source material.`;
     // プロンプト組み立て
     const elements = [];
     
-    if (keywords.person) elements.push(keywords.person);
+    // 日本人であることを明確に指定
+    if (keywords.person) {
+      elements.push('Japanese ' + keywords.person);
+    } else {
+      elements.push('Japanese person');
+    }
+    
     if (keywords.action) elements.push(keywords.action);
     if (keywords.object) elements.push(keywords.object);
-    if (keywords.setting) elements.push(keywords.setting);
+    
+    // 日本の設定を明確に指定
+    if (keywords.setting) {
+      elements.push('Japanese ' + keywords.setting);
+    } else {
+      elements.push('modern Japanese indoor setting');
+    }
     
     elements.push(styleMap[style] || 'photography');
     elements.push('no text, no letters');
@@ -411,11 +437,15 @@ Focus on accuracy and relevance to the source material.`;
       keywords.action = 'performing action';
     }
 
-    // 場所検出（改善）
-    if (text.match(/室内|屋内|部屋|家|中|店|オフィス|学校/)) {
+    // 場所検出（日本文化特有の場所を含む）
+    if (text.match(/室内|屋内|部屋|家|中|店|オフィス|学校|クリニック|病院/)) {
       keywords.setting = 'indoor scene';
-    } else if (text.match(/屋外|外|公園|街|道|庭|山|海|空/)) {
+    } else if (text.match(/屋外|外|公園|街|道|庭|山|海|空|温泉|神社|寺/)) {
       keywords.setting = 'outdoor scene';
+    } else if (text.match(/温泉|オンセン|銭湯|スパ/)) {
+      keywords.setting = 'traditional Japanese spa';
+    } else if (text.match(/和室|畳|座布団|縁側/)) {
+      keywords.setting = 'traditional Japanese room';
     }
 
     // 主要な名詞を探す（改善）
