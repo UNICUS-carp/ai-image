@@ -377,11 +377,53 @@ Rules:
     }
   }
 
-  // Gemini画像生成（修正版）
+  // Gemini 2.5 Flash画像生成
   async generateImageWithGemini(prompt, aspectRatio = '1:1') {
     if (!this.geminiApiKey) return null;
 
-    // 方法1: Imagen 3を試行
+    try {
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${this.geminiApiKey}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{
+              parts: [{
+                text: `Create an image: ${prompt}`
+              }]
+            }],
+            generationConfig: {
+              temperature: 0.8,
+              maxOutputTokens: 1024
+            }
+          })
+        }
+      );
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('[imageGen] Gemini 2.5 Flash error:', response.status, errorText);
+        throw new Error(`Gemini API error: ${response.status}`);
+      }
+
+      const data = await response.json();
+      console.log('[imageGen] Gemini 2.5 Flash response structure:', Object.keys(data));
+      
+      // Gemini 2.5 Flash は画像生成ではなくテキスト生成のため、
+      // 実際の画像APIを使用する必要があります
+      
+      // フォールバック: 実際の画像生成API（Imagen）を使用
+      return await this.generateWithImagenAPI(prompt, aspectRatio);
+      
+    } catch (error) {
+      console.error('[imageGen] Gemini generation error:', error);
+      return null;
+    }
+  }
+
+  // Imagen API（実際の画像生成）
+  async generateWithImagenAPI(prompt, aspectRatio = '1:1') {
     try {
       const response = await fetch(
         `https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-001:generateImage?key=${this.geminiApiKey}`,
@@ -401,57 +443,23 @@ Rules:
 
       if (response.ok) {
         const data = await response.json();
-        console.log('[imageGen] Imagen 3 response:', Object.keys(data));
+        console.log('[imageGen] Imagen API response:', Object.keys(data));
         
         if (data.generatedImages && data.generatedImages.length > 0) {
           const imageData = data.generatedImages[0];
           if (imageData.bytesBase64Encoded) {
-            console.log('[imageGen] ✅ Imagen 3 success');
+            console.log('[imageGen] ✅ Imagen API success');
             return `data:image/png;base64,${imageData.bytesBase64Encoded}`;
           }
         }
       } else {
-        console.warn('[imageGen] Imagen 3 failed:', response.status);
+        const errorText = await response.text();
+        console.error('[imageGen] Imagen API error:', response.status, errorText);
       }
     } catch (error) {
-      console.warn('[imageGen] Imagen 3 error:', error.message);
+      console.error('[imageGen] Imagen API error:', error);
     }
 
-    // 方法2: 古いImagenAPIを試行
-    try {
-      const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/imagegeneration-004:generateImage?key=${this.geminiApiKey}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            prompt: prompt,
-            config: {
-              aspectRatio: aspectRatio
-            }
-          })
-        }
-      );
-
-      if (response.ok) {
-        const data = await response.json();
-        console.log('[imageGen] Legacy Imagen response:', Object.keys(data));
-        
-        if (data.generatedImages && data.generatedImages.length > 0) {
-          const imageData = data.generatedImages[0];
-          if (imageData.bytesBase64Encoded) {
-            console.log('[imageGen] ✅ Legacy Imagen success');
-            return `data:image/png;base64,${imageData.bytesBase64Encoded}`;
-          }
-        }
-      } else {
-        console.warn('[imageGen] Legacy Imagen failed:', response.status);
-      }
-    } catch (error) {
-      console.warn('[imageGen] Legacy Imagen error:', error.message);
-    }
-
-    console.error('[imageGen] All Gemini methods failed');
     return null;
   }
 
