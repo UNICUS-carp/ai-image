@@ -511,15 +511,8 @@ ${sceneText}
     return this.generateMockPrompt(sceneText, style, null);
   }
 
-  // モックプロンプト生成（見出し対応）
+  // モックプロンプト生成（英語のみ、日本語排除）
   generateMockPrompt(text, style, heading) {
-    const keywords = text
-      .replace(/[^\w\s\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]/g, ' ')
-      .split(' ')
-      .filter(w => w.length > 2)
-      .slice(0, 3)
-      .join(' ');
-
     const styleMap = {
       photo: 'photorealistic professional',
       anime: 'anime illustration',
@@ -532,26 +525,34 @@ ${sceneText}
       colorful: 'vibrant colorful'
     };
 
-    // 記事内容に基づいて適切な人物像と雰囲気を推定
-    let personAge = 'middle-aged';
-    let emotion = 'calm expression';
-    let setting = 'indoor scene';
+    // 記事内容に基づいてシーンを英語で判定
+    let scene = 'Japanese person';
+    let emotion = 'neutral expression';
+    let action = 'standing';
+    let setting = 'indoor';
     
+    if (text.includes('ニット') || text.includes('着る') || text.includes('腕を上げ')) {
+      scene = 'Japanese woman putting on sweater';
+      action = 'raising arms';
+    }
     if (text.includes('痛み') || text.includes('つらい') || text.includes('苦しい')) {
-      emotion = 'worried expression, concerned look';
+      emotion = 'pain expression, worried face';
     }
-    if (text.includes('改善') || text.includes('解決') || text.includes('ストレッチ')) {
-      emotion = 'relieved expression, healthy impression';
+    if (text.includes('改善') || text.includes('ストレッチ') || text.includes('ケア')) {
+      scene = 'Japanese woman doing stretches';
+      emotion = 'focused expression';
+      action = 'stretching';
     }
-    if (text.includes('女性') || text.includes('ニット')) {
-      personAge = 'young Japanese woman';
+    if (text.includes('筋肉') || text.includes('血流') || text.includes('緊張')) {
+      scene = 'Japanese woman shoulder muscle tension';
+      emotion = 'uncomfortable expression';
     }
-    if (text.includes('デスク') || text.includes('PC') || text.includes('仕事')) {
-      setting = 'office desk environment';
+    if (text.includes('まとめ') || text.includes('改善') || text.includes('解決')) {
+      emotion = 'happy expression, relieved';
     }
 
-    // サンプル形式に基づいた詳細なプロンプト
-    return `${personAge} Japanese person, ${keywords}, ${emotion}, ${setting}, ${styleMap[style] || 'professional'}, no text, no letters, calm atmosphere`;
+    // 完全英語プロンプト（日本語キーワード排除）
+    return `${scene}, ${action}, ${emotion}, ${setting}, ${styleMap[style] || 'professional'}, no text, no letters, high quality`;
   }
 
   // Google Gemini 2.5 Flashによる実際の画像生成
