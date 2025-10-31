@@ -493,16 +493,17 @@ async function checkUsageLimits(req, res, next) {
     // 権限から使用制限を取得
     const limits = permissions.getUsageLimits(userEmail, userRole);
     
-    // 管理者（開発者）は制限なし
-    if (permissions.isDeveloper(userEmail, userRole)) {
-      req.usage = { articleCount: 0, regenerationCount: 0 };
-      req.limits = limits;
-      return next();
-    }
-
+    // 実際の使用量を取得（管理者も含む）
     const usage = await db.getTodayUsage(userId);
     const articleCount = usage?.article_count || 0;
     const regenerationCount = usage?.regeneration_count || 0;
+
+    // 管理者は制限チェックをスキップするが、使用量は正確に取得
+    if (permissions.isDeveloper(userEmail, userRole)) {
+      req.usage = { articleCount, regenerationCount };
+      req.limits = limits;
+      return next();
+    }
 
     // 制限チェック（有料ユーザー用）
     if (limits.articles !== -1 && articleCount >= limits.articles) {
@@ -543,6 +544,9 @@ app.get('/api/usage/stats', requireAuth, async (req, res) => {
     
     // 新しい権限システムを使用
     const userPermissions = permissions.getPermissionInfo(userEmail);
+    
+    // 使用量ログ出力
+    console.log(`[usage] Stats for ${userEmail} (${userPermissions.role}): articles=${usage?.article_count || 0}, regenerations=${usage?.regeneration_count || 0}`);
 
     res.json({
       success: true,
@@ -667,8 +671,13 @@ app.post('/api/generate', requireAuth, checkUsageLimits, async (req, res) => {
       });
     }
 
-    // 使用量を増加
-    await db.incrementUsage(req.user.id, 'article');
+    // 使用量を増加（管理者以外）
+    if (!permissions.isDeveloper(req.user.email, req.userRole)) {
+      await db.incrementUsage(req.user.id, 'article');
+      console.log(`[usage] User ${req.user.email} (${req.userRole}) - article count incremented`);
+    } else {
+      console.log(`[usage] Admin user ${req.user.email} - article not counted (unlimited)`);
+    }
 
     // AI画像生成処理
     console.log(`[api] Generating images for user ${req.user.id} with ${provider} provider...`);
@@ -767,9 +776,12 @@ app.post('/api/regenerate', requireAuth, async (req, res) => {
       });
     }
     
-    // 再生成成功時に使用量を増加
+    // 再生成成功時に使用量を増加（管理者以外）
     if (!permissions.isDeveloper(userEmail, userRole)) {
       await db.incrementUsage(userId, 'regeneration');
+      console.log(`[usage] User ${userEmail} (${userRole}) - regeneration count incremented`);
+    } else {
+      console.log(`[usage] Admin user ${userEmail} - regeneration not counted (unlimited)`);
     }
     
     res.json({
