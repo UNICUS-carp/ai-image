@@ -200,7 +200,7 @@ ${content}
   // OpenAI API呼び出し
   async callOpenAI(systemPrompt, userPrompt) {
     const payload = {
-      model: "gpt-4o-mini",
+      model: "gpt-4o",
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt }
@@ -245,40 +245,94 @@ ${content}
     }
   }
 
-  // ローカル意味分割（フォールバック）
+  // ローカル意味分割（フォールバック・改善版）
   semanticSplitLocal(content, targetCount) {
-    console.log(`[imageGen] Using local semantic splitting into ${targetCount} chunks`);
+    console.log(`[imageGen] Using enhanced local semantic splitting into ${targetCount} chunks`);
     
-    // 段落や句点で区切って意味的な分割を試行
-    const paragraphs = content.split(/\n\s*\n|\。\s*(?=[^\d])/).filter(p => p.trim());
-    const chunks = [];
+    // 見出しパターンを検出
+    const headingPattern = /小見出し\d+：([^\n]+)/g;
+    const headings = [];
+    let match;
     
-    if (paragraphs.length <= targetCount) {
-      // 段落数が目標以下の場合、段落ごとに分割
-      return paragraphs.slice(0, targetCount).map((text, index) => ({
-        index,
-        text: text.trim(),
-        heading: null
-      }));
+    while ((match = headingPattern.exec(content)) !== null) {
+      headings.push({
+        title: match[1],
+        index: match.index,
+        fullMatch: match[0]
+      });
     }
     
-    // 段落を組み合わせて目標チャンク数に
-    const chunkSize = Math.ceil(paragraphs.length / targetCount);
-    for (let i = 0; i < targetCount && i * chunkSize < paragraphs.length; i++) {
+    if (headings.length > 0 && headings.length <= targetCount) {
+      // 見出しベースで分割
+      const chunks = [];
+      for (let i = 0; i < headings.length; i++) {
+        const startIdx = headings[i].index;
+        const endIdx = i < headings.length - 1 ? headings[i + 1].index : content.length;
+        const chunkText = content.slice(startIdx, endIdx).trim();
+        
+        if (chunkText.length > 0) {
+          chunks.push({
+            index: i,
+            text: chunkText,
+            heading: headings[i].title,
+            chunkType: this.classifyChunkType(headings[i].title, chunkText)
+          });
+        }
+      }
+      return chunks.slice(0, targetCount);
+    }
+    
+    // フォールバック: 均等分割
+    const chunkSize = Math.ceil(content.length / targetCount);
+    const chunks = [];
+    
+    for (let i = 0; i < targetCount; i++) {
       const startIdx = i * chunkSize;
-      const endIdx = Math.min(startIdx + chunkSize, paragraphs.length);
-      const chunkText = paragraphs.slice(startIdx, endIdx).join('\n\n');
+      const endIdx = Math.min(startIdx + chunkSize, content.length);
+      let chunkText = content.slice(startIdx, endIdx);
+      
+      // 文の途中で切れないよう調整
+      if (i < targetCount - 1 && endIdx < content.length) {
+        const nextSentenceEnd = content.indexOf('。', endIdx);
+        if (nextSentenceEnd !== -1 && nextSentenceEnd - endIdx < 100) {
+          chunkText = content.slice(startIdx, nextSentenceEnd + 1);
+        }
+      }
       
       if (chunkText.trim()) {
         chunks.push({
           index: i,
           text: chunkText.trim(),
-          heading: null
+          heading: null,
+          chunkType: this.classifyChunkType(null, chunkText)
         });
       }
     }
     
     return chunks;
+  }
+
+  // チャンクタイプ分類
+  classifyChunkType(heading, text) {
+    const combined = (heading || '') + ' ' + text;
+    
+    if (combined.includes('はじめ') || combined.includes('経験') || combined.includes('痛み')) {
+      return 'introduction';
+    }
+    if (combined.includes('危険') || combined.includes('放置') || combined.includes('症状')) {
+      return 'warning';
+    }
+    if (combined.includes('方法') || combined.includes('着替え') || combined.includes('姿勢')) {
+      return 'technique';
+    }
+    if (combined.includes('ケア') || combined.includes('ストレッチ') || combined.includes('運動')) {
+      return 'exercise';
+    }
+    if (combined.includes('まとめ') || combined.includes('改善') || combined.includes('効果')) {
+      return 'conclusion';
+    }
+    
+    return 'general';
   }
 
   // 旧実装（削除予定）
@@ -348,7 +402,7 @@ ${content}
     }
 
     const payload = {
-      model: "gpt-4o-mini",
+      model: "gpt-4o",
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt }
@@ -511,8 +565,8 @@ ${sceneText}
     return this.generateMockPrompt(sceneText, style, null);
   }
 
-  // モックプロンプト生成（英語のみ、日本語排除）
-  generateMockPrompt(text, style, heading) {
+  // 改善されたプロンプト生成（チャンクタイプベース）
+  generateMockPrompt(text, style, heading, chunkType = null) {
     const styleMap = {
       photo: 'photorealistic professional',
       anime: 'anime illustration',
@@ -525,34 +579,72 @@ ${sceneText}
       colorful: 'vibrant colorful'
     };
 
-    // 記事内容に基づいてシーンを英語で判定
-    let scene = 'Japanese person';
-    let emotion = 'neutral expression';
-    let action = 'standing';
-    let setting = 'indoor';
+    // チャンクタイプに基づくシーン生成
+    const sceneTemplates = {
+      introduction: {
+        scene: 'Japanese woman morning routine putting on knit sweater',
+        action: 'raising arms with sudden pain',
+        emotion: 'surprised painful expression',
+        setting: 'bedroom morning light'
+      },
+      warning: {
+        scene: 'Japanese woman showing shoulder muscle anatomy concern',
+        action: 'touching shoulder with worry',
+        emotion: 'serious concerned expression',
+        setting: 'medical consultation room'
+      },
+      technique: {
+        scene: 'Japanese woman demonstrating proper dressing technique',
+        action: 'careful arm movement demonstration',
+        emotion: 'instructional focused expression',
+        setting: 'bright home interior'
+      },
+      exercise: {
+        scene: 'Japanese woman doing shoulder stretches',
+        action: 'gentle stretching exercise',
+        emotion: 'concentrated peaceful expression',
+        setting: 'exercise mat home'
+      },
+      conclusion: {
+        scene: 'Japanese woman happy after successful recovery',
+        action: 'easy comfortable arm movement',
+        emotion: 'bright satisfied smile',
+        setting: 'sunny home environment'
+      }
+    };
+
+    // チャンクタイプまたは内容ベースでシーンを決定
+    let sceneData = sceneTemplates.general || sceneTemplates.introduction;
     
-    if (text.includes('ニット') || text.includes('着る') || text.includes('腕を上げ')) {
-      scene = 'Japanese woman putting on sweater';
-      action = 'raising arms';
-    }
-    if (text.includes('痛み') || text.includes('つらい') || text.includes('苦しい')) {
-      emotion = 'pain expression, worried face';
-    }
-    if (text.includes('改善') || text.includes('ストレッチ') || text.includes('ケア')) {
-      scene = 'Japanese woman doing stretches';
-      emotion = 'focused expression';
-      action = 'stretching';
-    }
-    if (text.includes('筋肉') || text.includes('血流') || text.includes('緊張')) {
-      scene = 'Japanese woman shoulder muscle tension';
-      emotion = 'uncomfortable expression';
-    }
-    if (text.includes('まとめ') || text.includes('改善') || text.includes('解決')) {
-      emotion = 'happy expression, relieved';
+    if (chunkType && sceneTemplates[chunkType]) {
+      sceneData = sceneTemplates[chunkType];
+    } else {
+      // フォールバック: 内容ベース判定
+      if (text.includes('ニット') || text.includes('着る') || text.includes('痛み')) {
+        sceneData = sceneTemplates.introduction;
+      } else if (text.includes('筋肉') || text.includes('血流') || text.includes('危険')) {
+        sceneData = sceneTemplates.warning;
+      } else if (text.includes('方法') || text.includes('着替え') || text.includes('姿勢')) {
+        sceneData = sceneTemplates.technique;
+      } else if (text.includes('ストレッチ') || text.includes('運動') || text.includes('ケア')) {
+        sceneData = sceneTemplates.exercise;
+      } else if (text.includes('まとめ') || text.includes('改善') || text.includes('効果')) {
+        sceneData = sceneTemplates.conclusion;
+      }
     }
 
-    // 完全英語プロンプト（日本語キーワード排除）
-    return `${scene}, ${action}, ${emotion}, ${setting}, ${styleMap[style] || 'professional'}, no text, no letters, high quality`;
+    // より多様性のためのランダム要素
+    const variations = {
+      age: ['young', 'middle-aged'],
+      pose: ['sitting', 'standing'],
+      lighting: ['soft natural light', 'warm indoor lighting', 'bright daylight']
+    };
+    
+    const randomAge = variations.age[Math.floor(Math.random() * variations.age.length)];
+    const randomLighting = variations.lighting[Math.floor(Math.random() * variations.lighting.length)];
+
+    // 完全英語プロンプト生成
+    return `${randomAge} ${sceneData.scene}, ${sceneData.action}, ${sceneData.emotion}, ${sceneData.setting}, ${randomLighting}, ${styleMap[style] || 'professional'}, no text, no letters, high quality`;
   }
 
   // Google Gemini 2.5 Flashによる実際の画像生成
