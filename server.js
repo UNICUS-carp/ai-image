@@ -86,8 +86,8 @@ class UserPermissionManager {
         };
       case 'paid':
         return {
-          articles: 5,         // 1日5回
-          regenerations: 50    // 1日50回
+          articles: 3,         // 1日3回（コスト削減）
+          regenerations: 10    // 1日10回（コスト削減）
         };
       case 'free':
       default:
@@ -294,8 +294,8 @@ async function requireAuth(req, res, next) {
           current: 'free',
           required: 'paid',
           benefits: [
-            '1日5回の画像生成',
-            '1日50回の再生成', 
+            '1日3回の画像生成',
+            '1日10回の再生成', 
             'OpenAI GPT-4o-mini分析機能',
             '高品質なアイキャッチ画像'
           ]
@@ -514,7 +514,7 @@ async function checkUsageLimits(req, res, next) {
         userRole: userRole,
         upgradeInfo: userRole === 'paid' ? null : {
           message: '制限を解除するには有料プランにアップグレードしてください',
-          benefits: ['1日5回の画像生成', '1日50回の再生成']
+          benefits: ['1日3回の画像生成', '1日10回の再生成']
         }
       });
     }
