@@ -4,10 +4,14 @@ import rateLimit from 'express-rate-limit';
 import helmet from 'helmet';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import dotenv from 'dotenv';
 import SecureDatabase from './database.js';
 import EmailAuthenticator from './auth.js';
 import ConfigManager from './config.js';
 import ImageGeneratorV2 from './imageGenerator_v2.js';
+
+// Load environment variables
+dotenv.config({ path: '.env.local' });
 
 // ES Modules用のdirname設定
 const __filename = fileURLToPath(import.meta.url);
