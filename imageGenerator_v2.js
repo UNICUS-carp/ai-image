@@ -109,6 +109,39 @@ class ImageGeneratorV2 {
 
   // セマンティック分割（決定論的実装）
   semanticSplit(content, options) {
+    // 見出しを基準に分割を試みる
+    const headingPattern = /小見出し\d+：[^\n]+/g;
+    const headings = content.match(headingPattern) || [];
+    
+    if (headings.length > 0) {
+      const chunks = [];
+      let lastIndex = 0;
+      
+      headings.forEach((heading, i) => {
+        const headingIndex = content.indexOf(heading, lastIndex);
+        if (headingIndex !== -1) {
+          const nextHeadingIndex = i < headings.length - 1 
+            ? content.indexOf(headings[i + 1], headingIndex + heading.length)
+            : content.length;
+          
+          const chunkText = content.slice(headingIndex, nextHeadingIndex).trim();
+          if (chunkText.length > 0 && chunks.length < options.maxChunks) {
+            chunks.push({ 
+              index: chunks.length, 
+              text: chunkText, 
+              heading: heading.replace(/小見出し\d+：/, '').trim()
+            });
+          }
+          lastIndex = nextHeadingIndex;
+        }
+      });
+      
+      if (chunks.length > 0) {
+        return chunks.slice(0, options.maxChunks);
+      }
+    }
+    
+    // フォールバック：句点での分割
     const sentences = content.split(/(?<=。|\.)[\s]*/);
     const chunks = [];
     let buffer = "";
@@ -304,9 +337,9 @@ ${content}
       const geminiResponse = result.response;
       let imagePrompt = geminiResponse.text().trim();
       
-      // 50文字制限を強制
-      if (imagePrompt.length > 50) {
-        imagePrompt = imagePrompt.substring(0, 50);
+      // 80文字制限に変更（より詳細なプロンプトが必要）
+      if (imagePrompt.length > 80) {
+        imagePrompt = imagePrompt.substring(0, 80);
       }
       
       console.log(`[imageGen] Generated prompt for chunk ${chunk.index} "${chunk.heading || 'no heading'}":`, imagePrompt);
