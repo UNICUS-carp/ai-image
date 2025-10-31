@@ -1,5 +1,3 @@
-import { HfInference } from '@huggingface/inference';
-
 class ImageGeneratorV2 {
   constructor() {
     this.openaiApiKey = process.env.OPENAI_API_KEY;
@@ -77,28 +75,54 @@ class ImageGeneratorV2 {
 
   // 画像枚数を計算（汎用的）
   calculateImageCount(content, maxImages = 5) {
+    // null/undefinedチェック
+    if (!content || typeof content !== 'string') {
+      return 1;
+    }
+    
     const length = content.length;
+    
+    // 空文字列の場合
+    if (length === 0) {
+      return 1;
+    }
     
     // 段落数をカウント
     const paragraphs = content.split(/\n\n+/).filter(p => p.trim().length > 50);
     const paragraphCount = paragraphs.length;
     
-    // 文字数と段落数の両方を考慮
+    // 文字数ベースの計算（修正済み）
     let count = 1;
-    if (paragraphCount >= 5) count = Math.min(5, paragraphCount);
-    else if (length > 2000) count = 5;
-    else if (length > 1600) count = 4;
-    else if (length > 1200) count = 3;
-    else if (length > 800) count = 2;
+    if (length > 500) count = 2;
+    if (length > 800) count = 3; 
+    if (length > 1200) count = 4;
+    if (length > 1600) count = 5;
+    
+    // 段落数も考慮
+    if (paragraphCount >= 5) {
+      count = Math.max(count, Math.min(5, paragraphCount));
+    }
     
     return Math.min(count, maxImages);
   }
 
   // コンテンツ分割（汎用的）
   async splitContent(content, targetCount) {
+    // 空コンテンツの場合
+    if (!content || content.trim().length === 0) {
+      return [{
+        index: 0,
+        text: 'コンテンツがありません',
+        heading: null
+      }];
+    }
+    
     if (this.openaiApiKey) {
       try {
-        return await this.splitWithGPT(content, targetCount);
+        const result = await this.splitWithGPT(content, targetCount);
+        if (result && result.length > 0) {
+          return result;
+        }
       } catch (error) {
         console.warn('[imageGen] GPT splitting failed:', error.message);
       }
@@ -261,29 +285,36 @@ Rules:
       object: null,
       setting: null
     };
+    
+    if (!text) return keywords;
 
-    // 人物検出
-    if (text.match(/人|男性|女性|子供|老人|若者/)) {
+    // 人物検出（改善）
+    if (text.match(/人|男性|女性|子供|子ども|老人|若者|私|彼|彼女/)) {
       keywords.person = 'person';
     }
 
-    // 動作検出
-    const actionMatch = text.match(/([ぁ-ん]+[るたいく])/);
-    if (actionMatch) {
-      keywords.action = 'in action';
+    // 動作検出（改善）
+    if (text.match(/している|した|する|します|歩|走|食べ|読|書|見|聞|話/)) {
+      keywords.action = 'performing action';
     }
 
-    // 場所検出
-    if (text.match(/室内|屋内|部屋|家/)) {
+    // 場所検出（改善）
+    if (text.match(/室内|屋内|部屋|家|中|店|オフィス|学校/)) {
       keywords.setting = 'indoor scene';
-    } else if (text.match(/屋外|外|公園|街/)) {
+    } else if (text.match(/屋外|外|公園|街|道|庭|山|海|空/)) {
       keywords.setting = 'outdoor scene';
     }
 
-    // 主要な名詞を探す
-    const nounMatch = text.match(/[ァ-ヶー]+|[一-龠]+/g);
+    // 主要な名詞を探す（改善）
+    const nounMatch = text.match(/[ァ-ヶー]{2,}|[一-龠]{2,}/g);
     if (nounMatch && nounMatch.length > 0) {
-      keywords.object = nounMatch[0];
+      // 最初の意味のある名詞を選択
+      for (const noun of nounMatch) {
+        if (noun.length >= 2 && noun.length <= 10) {
+          keywords.object = noun;
+          break;
+        }
+      }
     }
 
     return keywords;
@@ -319,14 +350,27 @@ Rules:
   // GPTレスポンスのパース
   parseGPTResponse(response) {
     try {
+      // 空レスポンスチェック
+      if (!response) return [];
+      
       // JSONブロックを抽出
       let jsonStr = response;
       if (response.includes('```json')) {
         const match = response.match(/```json\n?([\s\S]*?)\n?```/);
         if (match) jsonStr = match[1];
+      } else if (response.includes('```')) {
+        const match = response.match(/```\n?([\s\S]*?)\n?```/);
+        if (match) jsonStr = match[1];
       }
       
-      return JSON.parse(jsonStr);
+      const parsed = JSON.parse(jsonStr);
+      
+      // 配列でない場合、配列に変換
+      if (!Array.isArray(parsed)) {
+        return [parsed];
+      }
+      
+      return parsed;
     } catch (error) {
       console.error('[imageGen] Failed to parse GPT response:', error);
       return [];
@@ -388,19 +432,33 @@ Rules:
     };
     
     const bgColor = colors[style] || '#6B7280';
-    const title = chunk.heading || `Scene ${chunk.index + 1}`;
+    // XML特殊文字をエスケープ
+    const escapeXml = (str) => {
+      if (!str) return '';
+      return str.toString()
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&apos;');
+    };
     
-    return `data:image/svg+xml;base64,${btoa(`
-      <svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
+    const title = escapeXml(chunk.heading || `Scene ${chunk.index + 1}`);
+    const safeStyle = escapeXml(style);
+    
+    const svgContent = `<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
         <rect fill="${bgColor}" width="${width}" height="${height}"/>
         <text x="50%" y="45%" font-family="Arial" font-size="48" fill="white" text-anchor="middle">
           ${title}
         </text>
         <text x="50%" y="55%" font-family="Arial" font-size="24" fill="white" text-anchor="middle">
-          Style: ${style}
+          Style: ${safeStyle}
         </text>
-      </svg>
-    `)}`;
+      </svg>`;
+    
+    // btoaはNode.jsではラテン文字のみサポート
+    const base64 = Buffer.from(svgContent).toString('base64');
+    return `data:image/svg+xml;base64,${base64}`;
   }
 
   // 画像再生成
