@@ -659,19 +659,21 @@
         const safeTitle = escapeHtml(image.title || `画像 ${index + 1}`);
         const safeHeading = image.heading ? escapeHtml(image.heading) : null;
         
+        // 重複表示を避ける: headingがある場合はheadingのみ、ない場合はtitleを表示
+        const displayTitle = safeHeading || safeTitle;
+        
         card.innerHTML = `
           <div class="image-container">
             <img src="${image.dataUrl}" alt="${safeTitle}" />
           </div>
           <div class="image-info">
-            <div class="image-title">${safeTitle}</div>
-            ${safeHeading ? `<div style="font-size: 12px; color: #888; margin-bottom: 5px;">📑 ${safeHeading}</div>` : ''}
+            <div class="image-title">画像 ${index + 1}</div>
             <div style="display: flex; gap: 10px; margin-top: 10px;">
               <button class="download-btn" onclick="downloadImage('${safeTitle.replace(/'/g, "\\'")}', '${image.dataUrl}')" style="flex: 1;">
                 ⬇️ ダウンロード
               </button>
               <button class="regenerate-btn" onclick="executeRegenerationDirect(${index})" style="flex: 1;">
-                🔄 修正
+                🔄 再生成
               </button>
             </div>
             <!-- 修正UI常時表示 -->

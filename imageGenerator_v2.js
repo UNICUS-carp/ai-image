@@ -227,10 +227,29 @@ ${content}
     return data.choices?.[0]?.message?.content;
   }
 
-  // GPTレスポンスのパース
+  // GPTレスポンスのパース（```json ブロック対応）
   parseGPTChunks(response, targetCount) {
     try {
-      const parsed = JSON.parse(response);
+      console.log('[imageGen] Raw GPT response:', response?.substring(0, 500));
+      
+      // ```json ブロックを除去
+      let cleanResponse = response;
+      if (response.includes('```json')) {
+        const jsonMatch = response.match(/```json\n?([\s\S]*?)\n?```/);
+        if (jsonMatch) {
+          cleanResponse = jsonMatch[1].trim();
+        }
+      } else if (response.includes('```')) {
+        // 一般的なコードブロックを除去
+        const codeMatch = response.match(/```[\s\S]*?\n([\s\S]*?)\n?```/);
+        if (codeMatch) {
+          cleanResponse = codeMatch[1].trim();
+        }
+      }
+      
+      console.log('[imageGen] Cleaned response:', cleanResponse?.substring(0, 300));
+      
+      const parsed = JSON.parse(cleanResponse);
       const chunks = parsed.chunks || [];
       
       return chunks.slice(0, targetCount).map((chunk, index) => ({
@@ -241,6 +260,7 @@ ${content}
       }));
     } catch (error) {
       console.error('[imageGen] Failed to parse GPT response:', error);
+      console.error('[imageGen] Original response:', response);
       throw new Error('Invalid GPT response format');
     }
   }
@@ -513,15 +533,11 @@ ${chunk.text}
   // 抽出した場面をプロンプト化
   async sceneToPrompt(sceneText, style) {
     const styleGuides = {
-      photo: 'photorealistic, detailed, high quality photography style',
-      anime: 'anime style, manga illustration, Japanese animation aesthetic',
-      '3d': '3D rendered, computer graphics, realistic 3D modeling',
-      pixel: 'pixel art style, retro gaming aesthetic, 8-bit graphics',
-      watercolor: 'watercolor painting style, soft brushstrokes, artistic',
-      modern: 'modern, clean, professional, minimalist aesthetic',
-      classic: 'classic, elegant, traditional, refined style',
-      minimal: 'minimal, simple, clean lines, monochromatic',
-      colorful: 'vibrant, colorful, dynamic, energetic'
+      photo: 'photorealistic photograph, professional studio lighting, high resolution, detailed realism',
+      deformed: 'cute deformed anime style, chibi character design, simplified kawaii features, cartoon aesthetic',
+      watercolor: 'traditional Japanese watercolor painting, soft brush textures, flowing pigments, artistic hand-painted style',
+      detailed: 'hyperdetailed illustration, intricate linework, fine art quality, professional artwork',
+      pictogram: 'simple pictogram design, minimalist icon style, clean geometric shapes, infographic illustration'
     };
 
     if (this.openaiApiKey) {
@@ -531,13 +547,21 @@ ${chunk.text}
 要求:
 - 日本人の人物を必ず含める
 - 場面の具体的な動作・表情・状況を表現
-- 文字やテキストは絶対に含めない
-- ${styleGuides[style] || styleGuides.modern}スタイル
-- 英語で70文字程度
+- 文字やテキストは絶対に含めない（no text, no letters を必ず含める）
+- スタイル指定: ${styleGuides[style] || styleGuides.photo}
+- 英語で100文字程度
 - 自然で具体的な描写にする
+- スタイルに応じた質感や表現を含める
+
+スタイル別要求:
+- photo: リアルな写真風、プロ照明
+- deformed: 可愛いデフォルメ、アニメ風
+- watercolor: 水彩画風、手描き感
+- detailed: 精密イラスト、細密画
+- pictogram: シンプル、アイコン風
 
 参考例:
-"ニットを着ようと腕を上げた瞬間、肩に痛みが走った" → "Japanese woman raising arms putting on sweater, sudden shoulder pain expression"`;
+"ニットを着ようと腕を上げた瞬間、肩に痛みが走った" → "Japanese woman raising arms putting on sweater, sudden shoulder pain expression, ${styleGuides[style] || styleGuides.photo}, no text, no letters"`;
 
         const userPrompt = `以下の日本語の場面を英語の画像生成プロンプトに変換してください。
 
@@ -565,18 +589,14 @@ ${sceneText}
     return this.generateMockPrompt(sceneText, style, null);
   }
 
-  // 改善されたプロンプト生成（チャンクタイプベース）
+  // 改善されたプロンプト生成（スタイル特化）
   generateMockPrompt(text, style, heading, chunkType = null) {
     const styleMap = {
-      photo: 'photorealistic professional',
-      anime: 'anime illustration',
-      '3d': '3D rendered graphics',
-      pixel: 'pixel art retro',
-      watercolor: 'watercolor artistic',
-      modern: 'modern professional',
-      classic: 'elegant classic',
-      minimal: 'minimalist clean',
-      colorful: 'vibrant colorful'
+      photo: 'photorealistic, high-quality photography, professional lighting, detailed',
+      deformed: 'cute deformed style, anime character design, simplified features, kawaii aesthetic',
+      watercolor: 'traditional watercolor painting, soft brush strokes, artistic style, hand-painted texture',
+      detailed: 'highly detailed illustration, intricate artwork, fine art style, precise linework',
+      pictogram: 'simple pictogram style, minimalist icon design, clean symbols, infographic style'
     };
 
     // チャンクタイプに基づくシーン生成
@@ -643,8 +663,18 @@ ${sceneText}
     const randomAge = variations.age[Math.floor(Math.random() * variations.age.length)];
     const randomLighting = variations.lighting[Math.floor(Math.random() * variations.lighting.length)];
 
-    // 完全英語プロンプト生成
-    return `${randomAge} ${sceneData.scene}, ${sceneData.action}, ${sceneData.emotion}, ${sceneData.setting}, ${randomLighting}, ${styleMap[style] || 'professional'}, no text, no letters, high quality`;
+    // スタイル別の追加指示
+    const styleInstructions = {
+      photo: 'professional studio lighting, sharp focus, Canon EOS camera style',
+      deformed: 'anime chibi style, large eyes, cute proportions, simple features',
+      watercolor: 'soft brush strokes, watercolor paper texture, artistic painting style',
+      detailed: 'intricate details, fine linework, hyperrealistic illustration',
+      pictogram: 'simple geometric shapes, clean lines, minimalist design, icon style'
+    };
+
+    // 完全英語プロンプト生成（スタイル強化）
+    const styleInstruction = styleInstructions[style] || styleInstructions.photo;
+    return `${randomAge} ${sceneData.scene}, ${sceneData.action}, ${sceneData.emotion}, ${sceneData.setting}, ${randomLighting}, ${styleMap[style] || 'professional'}, ${styleInstruction}, no text, no letters, high quality`;
   }
 
   // Google Gemini 2.5 Flashによる実際の画像生成
