@@ -730,6 +730,28 @@ app.post('/api/regenerate', requireAuth, async (req, res) => {
       });
     }
 
+    // 再生成制限チェック
+    const userId = req.user.id;
+    const userEmail = req.user.email;
+    const userRole = req.userRole;
+    const limits = permissions.getUsageLimits(userEmail, userRole);
+    
+    // 管理者以外は制限チェック
+    if (!permissions.isDeveloper(userEmail, userRole)) {
+      const usage = await db.getTodayUsage(userId);
+      const regenerationCount = usage?.regeneration_count || 0;
+      
+      if (limits.regenerations !== -1 && regenerationCount >= limits.regenerations) {
+        return res.status(403).json({
+          error: "DAILY_REGENERATION_LIMIT_EXCEEDED",
+          message: `本日の画像再生成回数が上限に達しました（${limits.regenerations}回/日）`,
+          usage: { regenerationCount },
+          limits: limits,
+          userRole: userRole
+        });
+      }
+    }
+
     // 再生成処理
     console.log(`[api] Regenerating image for user ${req.user.id}...`);
     const result = await imageGen.regenerateSingleImage(originalPrompt, instructions, {
@@ -743,6 +765,11 @@ app.post('/api/regenerate', requireAuth, async (req, res) => {
         message: result.message || '画像の修正に失敗しました',
         details: result.error
       });
+    }
+    
+    // 再生成成功時に使用量を増加
+    if (!permissions.isDeveloper(userEmail, userRole)) {
+      await db.incrementUsage(userId, 'regeneration');
     }
     
     res.json({
