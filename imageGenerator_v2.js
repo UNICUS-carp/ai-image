@@ -280,6 +280,10 @@ ${content}
       const articleContent = chunk.text.substring(0, 200); // 最初の200文字
       const systemPrompt = `記事内容: ${articleContent}\n\n上記内容の画像プロンプトを30文字以内で生成。スタイル: ${styleGuides[style] || styleGuides.modern}`;
 
+      console.log(`[imageGen] DEBUG - Chunk text:`, chunk.text);
+      console.log(`[imageGen] DEBUG - Article content:`, articleContent);
+      console.log(`[imageGen] DEBUG - System prompt:`, systemPrompt);
+
       const result = await this.geminiModel.generateContent(systemPrompt);
       const geminiResponse = result.response;
       let imagePrompt = geminiResponse.text().trim();
@@ -508,8 +512,12 @@ Generate an optimized image generation prompt:`;
       console.log(`[imageGen] Generating ${maxImages} images for content...`);
       
       // 1. 記事を分割（OpenAI GPT対応）
+      console.log(`[imageGen] DEBUG - Original content (first 200 chars):`, content.substring(0, 200));
       const chunks = await this.splitArticle(content, maxImages);
       console.log(`[imageGen] Split content into ${chunks.length} chunks`);
+      chunks.forEach((chunk, i) => {
+        console.log(`[imageGen] DEBUG - Chunk ${i}: "${chunk.text.substring(0, 100)}..."`);
+      });
       
       // 2. 各チャンクに対して画像生成
       const images = [];
