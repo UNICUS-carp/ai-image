@@ -280,20 +280,21 @@ ${content}
       const articleContent = chunk.text.substring(0, 200); // 最初の200文字
       const systemPrompt = `記事内容: ${articleContent}
 
-上記の日本の記事内容を表現する画像プロンプトを英語で生成してください。
+上記の記事内容を表現する画像生成プロンプトを英語で作成してください。
 
-サンプル形式:
-- 中年の日本人男性が、腰痛や体の痛みに悩んでいる様子 → 不安そうな表情、落ち着いた配色
-- 若い日本人女性が肩や首のコリに苦しんでいる姿 → 姿勢が悪く、デスク周りが散らかっている雰囲気  
-- 体調の不良、症状を引き起こす原因などに対処している様子 → 落ち着いた雰囲気、読者はリラックスした表情
-- 日本人男性が自宅でストレッチをしているシーン → 明るい表情、健康的な印象
+参考例（この形式で記事内容に合わせて作成）:
+- "Middle-aged Japanese man worried expression, back pain, calm colors"
+- "Young Japanese woman bad posture, shoulder stiffness, cluttered desk"  
+- "Japanese person relaxed expression, health recovery, calm atmosphere"
+- "Japanese man bright expression, stretching at home, healthy impression"
 
-条件:
-- 日本人の人物を含める
-- 記事の具体的なシーンと感情・雰囲気を描写
-- 文字やテキストは一切含めない
+要求:
+- 記事内容に基づく適切な日本人の人物（年齢・性別）
+- 具体的な状況・感情・表情を含める
+- 雰囲気や背景設定も含める
+- 文字やテキストは絶対に含めない
 - ${styleGuides[style] || styleGuides.modern}スタイル
-- 英語で60文字以内で記述`;
+- 英語で50文字程度`;
 
       console.log(`[imageGen] DEBUG - Chunk text:`, chunk.text);
       console.log(`[imageGen] DEBUG - Article content:`, articleContent);
