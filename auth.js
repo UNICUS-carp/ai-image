@@ -442,15 +442,27 @@ class EmailAuthenticator {
     return emailRegex.test(email);
   }
 
-  // ホワイトリスト管理
+  // ホワイトリスト管理（権限管理システムと統合）
   isEmailAllowed(email) {
-    // 環境変数からホワイトリストを取得（カンマ区切り）
-    const allowedEmails = process.env.ALLOWED_EMAILS 
+    // ADMIN_EMAILS と PAID_USER_EMAILS から許可されたメールアドレスを取得
+    const adminEmails = process.env.ADMIN_EMAILS 
+      ? process.env.ADMIN_EMAILS.split(',').map(e => e.trim().toLowerCase())
+      : [];
+    
+    const paidUserEmails = process.env.PAID_USER_EMAILS 
+      ? process.env.PAID_USER_EMAILS.split(',').map(e => e.trim().toLowerCase())
+      : [];
+    
+    // 従来のホワイトリスト（後方互換性）
+    const legacyAllowedEmails = process.env.ALLOWED_EMAILS 
       ? process.env.ALLOWED_EMAILS.split(',').map(e => e.trim().toLowerCase())
       : ['free_dial0120@yahoo.co.jp']; // デフォルト値
     
-    console.log(`[auth] Checking email ${email} against whitelist:`, allowedEmails);
-    return allowedEmails.includes(email.toLowerCase());
+    // 全ての許可されたメールアドレスを統合
+    const allAllowedEmails = [...new Set([...adminEmails, ...paidUserEmails, ...legacyAllowedEmails])];
+    
+    console.log(`[auth] Checking email ${email} against combined whitelist:`, allAllowedEmails);
+    return allAllowedEmails.includes(email.toLowerCase());
   }
 
   async sendAuthCodeEmail(email, code) {
