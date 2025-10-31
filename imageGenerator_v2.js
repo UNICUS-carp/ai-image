@@ -352,7 +352,7 @@ Rules:
           { role: 'user', content: userPrompt }
         ],
         temperature: 0.3,
-        max_tokens: 500
+        max_tokens: 2000
       })
     });
 
@@ -460,8 +460,7 @@ Rules:
             generationConfig: {
               temperature: 0.7,
               maxOutputTokens: 8192,
-              responseMimeType: 'application/json',
-              responseModalities: ['TEXT', 'IMAGE']
+              responseModalities: ['IMAGE']
             }
           })
         }
