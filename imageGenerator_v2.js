@@ -257,13 +257,20 @@ Rules:
 - Include style: ${styleGuides[style]}
 - Add "no text, no letters"
 - Keep under 120 characters
-- Be specific and clear`;
+- Be specific and clear
+- NEVER include: animals, lions, tigers, wildlife, safari, jungle
+- Focus on human activities, objects, environments relevant to the content`;
 
         const userPrompt = `Convert to image prompt:\n${sceneText}`;
         
         const response = await this.callOpenAI(systemPrompt, userPrompt);
-        if (response && response.includes('no text')) {
+        console.log(`[imageGen] Generated prompt: "${response}"`);
+        
+        // プロンプト検証
+        if (response && this.validatePrompt(response)) {
           return response.trim();
+        } else {
+          console.warn('[imageGen] Prompt validation failed, using fallback');
         }
       } catch (error) {
         console.warn('[imageGen] Prompt generation failed:', error.message);
@@ -272,6 +279,33 @@ Rules:
     
     // フォールバック：基本的なプロンプト生成
     return this.generateBasicPrompt(sceneText, style);
+  }
+
+  // プロンプト検証機能
+  validatePrompt(prompt) {
+    if (!prompt || prompt.length < 10) {
+      console.warn('[imageGen] Prompt too short');
+      return false;
+    }
+    
+    // 無関係なキーワードをチェック
+    const bannedKeywords = ['lion', 'lions', 'tiger', 'elephant', 'safari', 'jungle', 'wildlife', 'savanna', 'africa'];
+    const lowerPrompt = prompt.toLowerCase();
+    
+    for (const keyword of bannedKeywords) {
+      if (lowerPrompt.includes(keyword)) {
+        console.warn(`[imageGen] Prompt contains banned keyword: ${keyword}`);
+        return false;
+      }
+    }
+    
+    // "no text, no letters"が含まれているかチェック
+    if (!lowerPrompt.includes('no text')) {
+      console.warn('[imageGen] Prompt missing "no text" directive');
+      return false;
+    }
+    
+    return true;
   }
 
   // 基本的なプロンプト生成（汎用的）
