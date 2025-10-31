@@ -281,12 +281,19 @@ ${content}
       const systemPrompt = `記事内容: ${articleContent}
 
 上記の日本の記事内容を表現する画像プロンプトを英語で生成してください。
+
+サンプル形式:
+- 中年の日本人男性が、腰痛や体の痛みに悩んでいる様子 → 不安そうな表情、落ち着いた配色
+- 若い日本人女性が肩や首のコリに苦しんでいる姿 → 姿勢が悪く、デスク周りが散らかっている雰囲気  
+- 体調の不良、症状を引き起こす原因などに対処している様子 → 落ち着いた雰囲気、読者はリラックスした表情
+- 日本人男性が自宅でストレッチをしているシーン → 明るい表情、健康的な印象
+
 条件:
 - 日本人の人物を含める
-- 記事の具体的なシーンを描写
+- 記事の具体的なシーンと感情・雰囲気を描写
 - 文字やテキストは一切含めない
 - ${styleGuides[style] || styleGuides.modern}スタイル
-- 50文字以内の英語で記述`;
+- 英語で60文字以内で記述`;
 
       console.log(`[imageGen] DEBUG - Chunk text:`, chunk.text);
       console.log(`[imageGen] DEBUG - Article content:`, articleContent);
@@ -316,7 +323,7 @@ ${content}
       .replace(/[^\w\s\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]/g, ' ')
       .split(' ')
       .filter(w => w.length > 2)
-      .slice(0, 4)
+      .slice(0, 3)
       .join(' ');
 
     const styleMap = {
@@ -331,11 +338,26 @@ ${content}
       colorful: 'vibrant colorful'
     };
 
-    const headingKeywords = heading ? heading.replace(/[^\w\s\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]/g, ' ').split(' ').filter(w => w.length > 1).slice(0, 2).join(' ') : '';
-    const allKeywords = [headingKeywords, keywords].filter(k => k).join(' ');
+    // 記事内容に基づいて適切な人物像と雰囲気を推定
+    let personAge = 'middle-aged';
+    let emotion = 'calm expression';
+    let setting = 'indoor scene';
+    
+    if (text.includes('痛み') || text.includes('つらい') || text.includes('苦しい')) {
+      emotion = 'worried expression, concerned look';
+    }
+    if (text.includes('改善') || text.includes('解決') || text.includes('ストレッチ')) {
+      emotion = 'relieved expression, healthy impression';
+    }
+    if (text.includes('女性') || text.includes('ニット')) {
+      personAge = 'young Japanese woman';
+    }
+    if (text.includes('デスク') || text.includes('PC') || text.includes('仕事')) {
+      setting = 'office desk environment';
+    }
 
-    // 日本人と具体的なシーンを含む、より詳細なプロンプト
-    return `Japanese person, ${allKeywords}, realistic scene, no text, no letters, ${styleMap[style] || 'professional'}, high quality illustration`;
+    // サンプル形式に基づいた詳細なプロンプト
+    return `${personAge} Japanese person, ${keywords}, ${emotion}, ${setting}, ${styleMap[style] || 'professional'}, no text, no letters, calm atmosphere`;
   }
 
   // Google Gemini 2.5 Flashによる実際の画像生成
