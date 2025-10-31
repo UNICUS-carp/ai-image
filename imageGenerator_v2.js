@@ -131,8 +131,16 @@ class ImageGeneratorV2 {
       }];
     }
     
+    // 文字数制限：500文字以下の場合はGPTを使わずローカル分割
+    if (content.length <= 500) {
+      console.log(`[imageGen] Content is ${content.length} chars, using local splitting`);
+      return this.splitContentLocal(content, targetCount);
+    }
+    
     if (this.openaiApiKey) {
       try {
+        // 長いコンテンツの場合のみGPTを使用
+        console.log(`[imageGen] Content is ${content.length} chars, using GPT splitting`);
         const result = await this.splitWithGPT(content, targetCount);
         if (result && result.length > 0) {
           return result;
@@ -433,7 +441,7 @@ Rules:
     }
   }
 
-  // Gemini 2.5 Flash Image 画像生成
+  // Gemini 2.5 Flash Image 画像生成（正しい実装）
   async generateImageWithGemini(prompt, aspectRatio = '1:1') {
     if (!this.geminiApiKey) {
       console.log('[imageGen] No Gemini API key, skipping');
@@ -448,8 +456,7 @@ Rules:
         {
           method: 'POST',
           headers: { 
-            'Content-Type': 'application/json',
-            'x-goog-api-key': this.geminiApiKey
+            'Content-Type': 'application/json'
           },
           body: JSON.stringify({
             contents: [{
@@ -458,9 +465,8 @@ Rules:
               }]
             }],
             generationConfig: {
-              temperature: 0.7,
-              maxOutputTokens: 8192,
-              responseModalities: ['IMAGE']
+              candidateCount: 1,
+              temperature: 0.7
             }
           })
         }
@@ -471,20 +477,13 @@ Rules:
       if (!response.ok) {
         const errorText = await response.text();
         console.error('[imageGen] Gemini 2.5 Flash Image error:', response.status, errorText);
-        
-        // 404の場合は別のエンドポイントを試す
-        if (response.status === 404) {
-          console.log('[imageGen] Trying alternative Gemini endpoint...');
-          return await this.generateWithAlternativeGemini(prompt, aspectRatio);
-        }
-        
         throw new Error(`Gemini API error: ${response.status}`);
       }
 
       const data = await response.json();
       console.log('[imageGen] Gemini response structure:', Object.keys(data));
       
-      // Gemini 2.5 Flash Image のレスポンス構造を確認
+      // 正しいレスポンス構造の確認
       if (data.candidates && data.candidates.length > 0) {
         const candidate = data.candidates[0];
         console.log('[imageGen] Candidate structure:', Object.keys(candidate));
@@ -493,17 +492,11 @@ Rules:
           for (const part of candidate.content.parts) {
             console.log('[imageGen] Part keys:', Object.keys(part));
             
-            // 画像データを探す
+            // inlineData形式の画像データ
             if (part.inlineData && part.inlineData.data) {
               const mimeType = part.inlineData.mimeType || 'image/png';
               console.log(`[imageGen] ✅ Found image data with mime type: ${mimeType}`);
               return `data:${mimeType};base64,${part.inlineData.data}`;
-            }
-            
-            // 別の形式の画像データ
-            if (part.fileData && part.fileData.fileUri) {
-              console.log('[imageGen] Found file URI:', part.fileData.fileUri);
-              // ファイルURIの場合は追加処理が必要
             }
           }
         }
