@@ -41,11 +41,25 @@ class ImageGeneratorV2 {
         
         let imageDataUrl = null;
         if (!this.mockMode) {
+          console.log(`[imageGen] Attempting Gemini generation for chunk ${chunk.index}`);
           imageDataUrl = await this.generateImageWithGemini(prompt, aspectRatio);
         }
         
         if (!imageDataUrl) {
+          console.log(`[imageGen] Gemini failed, using placeholder for chunk ${chunk.index}`);
           imageDataUrl = this.generatePlaceholderImage(chunk, prompt, taste, aspectRatio);
+          
+          // プレースホルダー生成の確認
+          if (!imageDataUrl) {
+            console.error(`[imageGen] Placeholder generation failed for chunk ${chunk.index}`);
+            imageDataUrl = this.generateFallbackImage(chunk.index);
+          }
+          
+          // 最終チェック - 必ず何かしらの画像を返す
+          if (!imageDataUrl) {
+            console.error(`[imageGen] All fallback methods failed for chunk ${chunk.index} - creating emergency placeholder`);
+            imageDataUrl = 'data:image/svg+xml;base64,' + Buffer.from('<svg width="1024" height="1024" xmlns="http://www.w3.org/2000/svg"><rect fill="#FF6B6B" width="1024" height="1024"/><text x="50%" y="50%" font-family="Arial" font-size="36" fill="white" text-anchor="middle">画像生成エラー</text></svg>').toString('base64');
+          }
         }
         
         images.push({
@@ -140,7 +154,10 @@ Return a JSON array with objects containing: {"text": "segment content", "summar
     const userPrompt = `Split this content into ${targetCount} visual segments:\n\n${content}`;
 
     const response = await this.callOpenAI(systemPrompt, userPrompt);
+    console.log(`[imageGen] Raw GPT response (first 500 chars):`, response?.substring(0, 500));
+    
     const parsed = this.parseGPTResponse(response);
+    console.log(`[imageGen] Parsed GPT response:`, parsed);
     
     return parsed.map((item, index) => ({
       index,
@@ -351,70 +368,150 @@ Rules:
   parseGPTResponse(response) {
     try {
       // 空レスポンスチェック
-      if (!response) return [];
+      if (!response) {
+        console.log('[imageGen] Empty response from GPT');
+        return [];
+      }
+      
+      console.log(`[imageGen] Parsing GPT response (first 200 chars): ${response.substring(0, 200)}`);
       
       // JSONブロックを抽出
-      let jsonStr = response;
-      if (response.includes('```json')) {
-        const match = response.match(/```json\n?([\s\S]*?)\n?```/);
-        if (match) jsonStr = match[1];
-      } else if (response.includes('```')) {
-        const match = response.match(/```\n?([\s\S]*?)\n?```/);
-        if (match) jsonStr = match[1];
+      let jsonStr = response.trim();
+      
+      // バッククォートやマークダウンコードブロックを処理
+      if (jsonStr.includes('```json')) {
+        const match = jsonStr.match(/```json\s*([\s\S]*?)\s*```/);
+        if (match) {
+          jsonStr = match[1].trim();
+          console.log('[imageGen] Extracted JSON from ```json block');
+        }
+      } else if (jsonStr.includes('```')) {
+        const match = jsonStr.match(/```\s*([\s\S]*?)\s*```/);
+        if (match) {
+          jsonStr = match[1].trim();
+          console.log('[imageGen] Extracted content from ``` block');
+        }
       }
+      
+      // 最初と最後の文字をチェック
+      if (jsonStr.startsWith('`') && jsonStr.endsWith('`')) {
+        jsonStr = jsonStr.slice(1, -1).trim();
+        console.log('[imageGen] Removed surrounding backticks');
+      }
+      
+      // JSON以外の文字が含まれている場合の処理
+      if (!jsonStr.startsWith('[') && !jsonStr.startsWith('{')) {
+        console.log('[imageGen] Response does not start with JSON - attempting to extract');
+        // JSONらしき部分を探す
+        const jsonMatch = jsonStr.match(/[\[\{][\s\S]*[\]\}]/);
+        if (jsonMatch) {
+          jsonStr = jsonMatch[0];
+          console.log('[imageGen] Found JSON-like content in response');
+        } else {
+          console.warn('[imageGen] No JSON found in response, returning empty array');
+          return [];
+        }
+      }
+      
+      console.log(`[imageGen] Final JSON string to parse: ${jsonStr.substring(0, 100)}...`);
       
       const parsed = JSON.parse(jsonStr);
       
       // 配列でない場合、配列に変換
       if (!Array.isArray(parsed)) {
+        console.log('[imageGen] Converting single object to array');
         return [parsed];
       }
       
+      console.log(`[imageGen] Successfully parsed ${parsed.length} items from GPT response`);
       return parsed;
     } catch (error) {
-      console.error('[imageGen] Failed to parse GPT response:', error);
+      console.error('[imageGen] Failed to parse GPT response:', error.message);
+      console.error('[imageGen] Raw response that failed:', response);
+      console.error('[imageGen] Error details:', error);
       return [];
     }
   }
 
-  // Gemini 2.5 Flash画像生成
+  // Gemini 2.5 Flash Image 画像生成
   async generateImageWithGemini(prompt, aspectRatio = '1:1') {
-    if (!this.geminiApiKey) return null;
+    if (!this.geminiApiKey) {
+      console.log('[imageGen] No Gemini API key, skipping');
+      return null;
+    }
 
     try {
+      console.log(`[imageGen] Generating image with Gemini 2.5 Flash Image: "${prompt}"`);
+      
       const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${this.geminiApiKey}`,
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key=${this.geminiApiKey}`,
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 
+            'Content-Type': 'application/json',
+            'x-goog-api-key': this.geminiApiKey
+          },
           body: JSON.stringify({
             contents: [{
               parts: [{
-                text: `Create an image: ${prompt}`
+                text: prompt
               }]
             }],
             generationConfig: {
-              temperature: 0.8,
-              maxOutputTokens: 1024
+              temperature: 0.7,
+              maxOutputTokens: 8192,
+              responseMimeType: 'application/json',
+              responseModalities: ['TEXT', 'IMAGE']
             }
           })
         }
       );
 
+      console.log(`[imageGen] Gemini response status: ${response.status}`);
+
       if (!response.ok) {
         const errorText = await response.text();
-        console.error('[imageGen] Gemini 2.5 Flash error:', response.status, errorText);
+        console.error('[imageGen] Gemini 2.5 Flash Image error:', response.status, errorText);
+        
+        // 404の場合は別のエンドポイントを試す
+        if (response.status === 404) {
+          console.log('[imageGen] Trying alternative Gemini endpoint...');
+          return await this.generateWithAlternativeGemini(prompt, aspectRatio);
+        }
+        
         throw new Error(`Gemini API error: ${response.status}`);
       }
 
       const data = await response.json();
-      console.log('[imageGen] Gemini 2.5 Flash response structure:', Object.keys(data));
+      console.log('[imageGen] Gemini response structure:', Object.keys(data));
       
-      // Gemini 2.5 Flash は画像生成ではなくテキスト生成のため、
-      // 実際の画像APIを使用する必要があります
+      // Gemini 2.5 Flash Image のレスポンス構造を確認
+      if (data.candidates && data.candidates.length > 0) {
+        const candidate = data.candidates[0];
+        console.log('[imageGen] Candidate structure:', Object.keys(candidate));
+        
+        if (candidate.content && candidate.content.parts) {
+          for (const part of candidate.content.parts) {
+            console.log('[imageGen] Part keys:', Object.keys(part));
+            
+            // 画像データを探す
+            if (part.inlineData && part.inlineData.data) {
+              const mimeType = part.inlineData.mimeType || 'image/png';
+              console.log(`[imageGen] ✅ Found image data with mime type: ${mimeType}`);
+              return `data:${mimeType};base64,${part.inlineData.data}`;
+            }
+            
+            // 別の形式の画像データ
+            if (part.fileData && part.fileData.fileUri) {
+              console.log('[imageGen] Found file URI:', part.fileData.fileUri);
+              // ファイルURIの場合は追加処理が必要
+            }
+          }
+        }
+      }
       
-      // フォールバック: 実際の画像生成API（Imagen）を使用
-      return await this.generateWithImagenAPI(prompt, aspectRatio);
+      console.log('[imageGen] No image data found in Gemini response');
+      return null;
       
     } catch (error) {
       console.error('[imageGen] Gemini generation error:', error);
@@ -422,45 +519,81 @@ Rules:
     }
   }
 
-  // Imagen API（実際の画像生成）
-  async generateWithImagenAPI(prompt, aspectRatio = '1:1') {
-    try {
-      const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-001:generateImage?key=${this.geminiApiKey}`,
-        {
+  // Alternative Gemini endpoint
+  async generateWithAlternativeGemini(prompt, aspectRatio = '1:1') {
+    const alternativeEndpoints = [
+      'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent',
+      'https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash-image:generateContent'
+    ];
+
+    for (const endpoint of alternativeEndpoints) {
+      try {
+        console.log(`[imageGen] Trying alternative endpoint: ${endpoint}`);
+        
+        const response = await fetch(`${endpoint}?key=${this.geminiApiKey}`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 
+            'Content-Type': 'application/json',
+            'x-goog-api-key': this.geminiApiKey
+          },
           body: JSON.stringify({
-            prompt: prompt,
-            config: {
-              aspectRatio: aspectRatio,
-              safetyFilterLevel: "BLOCK_ONLY_HIGH",
-              personGeneration: "ALLOW_ADULT"
+            contents: [{
+              parts: [{
+                text: `Generate an image: ${prompt}. Style requirements: aspect ratio ${aspectRatio}, high quality, no text or letters in image.`
+              }]
+            }],
+            generationConfig: {
+              temperature: 0.7,
+              maxOutputTokens: 8192
             }
           })
-        }
-      );
+        });
 
-      if (response.ok) {
-        const data = await response.json();
-        console.log('[imageGen] Imagen API response:', Object.keys(data));
+        console.log(`[imageGen] Alternative response status: ${response.status}`);
         
-        if (data.generatedImages && data.generatedImages.length > 0) {
-          const imageData = data.generatedImages[0];
-          if (imageData.bytesBase64Encoded) {
-            console.log('[imageGen] ✅ Imagen API success');
-            return `data:image/png;base64,${imageData.bytesBase64Encoded}`;
-          }
+        if (response.ok) {
+          const data = await response.json();
+          console.log('[imageGen] Alternative API response structure:', Object.keys(data));
+          
+          // 標準的なGeminiレスポンスの場合、テキストのみ返される可能性が高い
+          // この場合は画像生成用の別のAPIに切り替え
+          console.log('[imageGen] Alternative endpoint returned text response, not image');
+        } else {
+          const errorText = await response.text();
+          console.log(`[imageGen] ${endpoint} failed:`, response.status, errorText.substring(0, 200));
         }
-      } else {
-        const errorText = await response.text();
-        console.error('[imageGen] Imagen API error:', response.status, errorText);
+      } catch (error) {
+        console.log(`[imageGen] ${endpoint} error:`, error.message);
       }
-    } catch (error) {
-      console.error('[imageGen] Imagen API error:', error);
     }
 
+    console.log('[imageGen] All alternative Gemini endpoints failed');
     return null;
+  }
+
+  // Fallback to generating placeholder
+  generateFallbackImage(index) {
+    console.log(`[imageGen] Generating fallback image for index ${index}`);
+    
+    const width = 1024;
+    const height = 1024;
+    const bgColor = '#4A90E2';
+    
+    const svgContent = `<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
+        <rect fill="${bgColor}" width="${width}" height="${height}"/>
+        <text x="50%" y="40%" font-family="Arial" font-size="36" fill="white" text-anchor="middle">
+          画像 ${index + 1}
+        </text>
+        <text x="50%" y="50%" font-family="Arial" font-size="18" fill="white" text-anchor="middle">
+          画像生成に失敗しました
+        </text>
+        <text x="50%" y="60%" font-family="Arial" font-size="14" fill="white" text-anchor="middle">
+          プレースホルダー画像
+        </text>
+      </svg>`;
+    
+    const base64 = Buffer.from(svgContent).toString('base64');
+    return `data:image/svg+xml;base64,${base64}`;
   }
 
   // プレースホルダー画像生成
@@ -524,12 +657,24 @@ Rules:
       }
       
       if (!imageDataUrl) {
+        console.log('[imageGen] Regeneration failed, using placeholder');
         imageDataUrl = this.generatePlaceholderImage(
           { index: 0, heading: 'Regenerated' },
           newPrompt,
           taste,
           aspectRatio
         );
+        
+        // 最終フォールバック
+        if (!imageDataUrl) {
+          console.error('[imageGen] Regeneration placeholder failed, using emergency fallback');
+          imageDataUrl = this.generateFallbackImage(0);
+        }
+        
+        // 緊急フォールバック
+        if (!imageDataUrl) {
+          imageDataUrl = 'data:image/svg+xml;base64,' + Buffer.from('<svg width="1024" height="1024" xmlns="http://www.w3.org/2000/svg"><rect fill="#FF6B6B" width="1024" height="1024"/><text x="50%" y="50%" font-family="Arial" font-size="36" fill="white" text-anchor="middle">再生成エラー</text></svg>').toString('base64');
+        }
       }
       
       return {
