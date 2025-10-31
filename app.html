@@ -648,15 +648,26 @@
         const card = document.createElement('div');
         card.className = 'image-card';
         
+        // プロンプトインジェクション対策: HTMLエスケープ関数
+        function escapeHtml(text) {
+          const div = document.createElement('div');
+          div.textContent = text;
+          return div.innerHTML;
+        }
+
+        // 安全な文字列でHTML構築
+        const safeTitle = escapeHtml(image.title || `画像 ${index + 1}`);
+        const safeHeading = image.heading ? escapeHtml(image.heading) : null;
+        
         card.innerHTML = `
           <div class="image-container">
-            <img src="${image.dataUrl}" alt="${image.title}" />
+            <img src="${image.dataUrl}" alt="${safeTitle}" />
           </div>
           <div class="image-info">
-            <div class="image-title">${image.title || `画像 ${index + 1}`}</div>
-            ${image.heading ? `<div style="font-size: 12px; color: #888; margin-bottom: 5px;">📑 ${image.heading}</div>` : ''}
+            <div class="image-title">${safeTitle}</div>
+            ${safeHeading ? `<div style="font-size: 12px; color: #888; margin-bottom: 5px;">📑 ${safeHeading}</div>` : ''}
             <div style="display: flex; gap: 10px; margin-top: 10px;">
-              <button class="download-btn" onclick="downloadImage('${image.title || `画像_${index + 1}`}', '${image.dataUrl}')" style="flex: 1;">
+              <button class="download-btn" onclick="downloadImage('${safeTitle.replace(/'/g, "\\'")}', '${image.dataUrl}')" style="flex: 1;">
                 ⬇️ ダウンロード
               </button>
               <button class="regenerate-btn" onclick="executeRegenerationDirect(${index})" style="flex: 1;">
@@ -843,8 +854,8 @@
       try {
         const token = localStorage.getItem('access_token');
         
-        // 自動修正指示を生成（プロンプトを少し変更）
-        const autoInstructions = generateAutoInstructions(originalImage.prompt);
+        // 自動修正指示を生成（プロンプトが存在する場合のみ）
+        const autoInstructions = originalImage.prompt ? generateAutoInstructions(originalImage.prompt) : 'より良い画像に修正してください';
         
         const xhr = new XMLHttpRequest();
         xhr.open('POST', `${BACKEND}/api/regenerate`, true);
@@ -887,7 +898,7 @@
 
         // ユーザー選択またはフォームの値を使用
         xhr.send(JSON.stringify({
-          originalPrompt: originalImage.prompt,
+          originalPrompt: originalImage.prompt || 'Default prompt',
           instructions: autoInstructions,
           style: customStyle || document.getElementById('style').value,
           aspectRatio: customAspectRatio || document.getElementById('aspectRatio').value

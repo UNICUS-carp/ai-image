@@ -849,10 +849,10 @@ Generate an optimized image generation prompt:`;
           // 実画像が生成できた場合
           images.push({
             id: `gemini-${chunk.index}-${Date.now()}`,
-            title: chunk.heading || `AI生成画像 ${chunk.index + 1}`,
-            heading: chunk.heading,
+            title: this.sanitizeText(chunk.heading || `AI生成画像 ${chunk.index + 1}`),
+            heading: chunk.heading ? this.sanitizeText(chunk.heading) : null,
             dataUrl: realImage,
-            prompt: prompt,
+            // prompt: prompt, // セキュリティ対策: プロンプトを除去
             provider: 'gemini-2.5-flash-image',
             type: 'real',
             visualElements: chunk.visualElements,
@@ -932,9 +932,9 @@ Generate an optimized image generation prompt:`;
 
     return {
       id: `generated-${chunk.index}-${Date.now()}`,
-      title: chunk.heading || `生成画像 ${chunk.index + 1}`,
+      title: this.sanitizeText(chunk.heading || `生成画像 ${chunk.index + 1}`),
       dataUrl: `data:image/svg+xml;base64,${base64}`,
-      prompt: prompt,
+      // prompt: prompt, // セキュリティ対策: プロンプトを除去
       provider: this.mockMode ? 'mock' : 'gemini'
     };
   }
@@ -974,6 +974,30 @@ Generate an optimized image generation prompt:`;
       minimal: 'ミニマル',
       colorful: 'カラフル'
     };
+  }
+
+  // テキストサニタイゼーション（セキュリティ対策）
+  sanitizeText(text) {
+    if (!text) return text;
+    
+    // HTMLエスケープとプロンプトインジェクション対策
+    return text
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#x27;')
+      .replace(/\//g, '&#x2F;')
+      // プロンプトインジェクション対策: 危険な文字列を除去
+      .replace(/javascript:/gi, '')
+      .replace(/data:/gi, '')
+      .replace(/vbscript:/gi, '')
+      .replace(/onload/gi, '')
+      .replace(/onerror/gi, '')
+      .replace(/onclick/gi, '')
+      .replace(/<script/gi, '')
+      .replace(/<\/script/gi, '')
+      .substring(0, 200); // 長さ制限
   }
 
   // 言語と地域検出
@@ -1070,7 +1094,7 @@ Generate an optimized image generation prompt:`;
           id: `regenerated-${Date.now()}`,
           title: '修正版画像',
           dataUrl: imageDataUrl,
-          prompt: regeneratePrompt,
+          // prompt: regeneratePrompt, // セキュリティ対策: プロンプトを除去
           provider: this.mockMode ? 'enhanced-mock' : 'gemini-2.5-flash'
         },
         message: '画像を修正しました'

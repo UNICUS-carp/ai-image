@@ -1,0 +1,19 @@
+# Environment variables (contains sensitive information)
+.env.local
+.env
+
+# Node.js
+node_modules/
+npm-debug.log*
+
+# Database
+*.db
+*.sqlite
+
+# Logs
+logs/
+*.log
+
+# OS generated files
+.DS_Store
+Thumbs.db
