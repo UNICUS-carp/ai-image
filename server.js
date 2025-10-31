@@ -41,8 +41,10 @@ class UserPermissionManager {
       .map(email => email.toLowerCase().trim())
       .filter(email => email.length > 0);
     
-    console.log(`[auth] Loaded ${this.adminEmails.length} admin users`);
-    console.log(`[auth] Loaded ${this.paidUserEmails.length} paid users`);
+    console.log(`[auth] Loaded ${this.adminEmails.length} admin users:`, this.adminEmails);
+    console.log(`[auth] Loaded ${this.paidUserEmails.length} paid users:`, this.paidUserEmails);
+    console.log(`[auth] ADMIN_EMAILS env var:`, process.env.ADMIN_EMAILS);
+    console.log(`[auth] PAID_USER_EMAILS env var:`, process.env.PAID_USER_EMAILS);
     
     // セキュリティ: 重複チェック
     const duplicates = this.adminEmails.filter(email => this.paidUserEmails.includes(email));
@@ -284,12 +286,20 @@ async function requireAuth(req, res, next) {
     const userRole = permissions.getUserRole(req.user.email);
     const userPermissions = permissions.getPermissionInfo(req.user.email);
     
+    // デバッグログ
+    console.log(`[auth] User: ${req.user.email}`);
+    console.log(`[auth] Determined role: ${userRole}`);
+    console.log(`[auth] isPaidUser: ${permissions.isPaidUser(req.user.email, userRole)}`);
+    console.log(`[auth] Available admin emails:`, permissions.adminEmails);
+    console.log(`[auth] Available paid emails:`, permissions.paidUserEmails);
+    
     // リクエストに権限情報を追加
     req.userRole = userRole;
     req.userPermissions = userPermissions;
     
     // 無料ユーザーのアクセス制限（管理者と有料ユーザー以外）
     if (!permissions.isPaidUser(req.user.email, userRole)) {
+      console.log(`[auth] Access denied for user ${req.user.email} with role ${userRole}`);
       return res.status(403).json({
         error: 'SUBSCRIPTION_REQUIRED',
         message: 'このサービスの利用には有料プランへの登録が必要です',
@@ -306,6 +316,8 @@ async function requireAuth(req, res, next) {
         }
       });
     }
+    
+    console.log(`[auth] Access granted for user ${req.user.email} with role ${userRole}`);
     
     next();
   } catch (error) {
