@@ -21,43 +21,35 @@ class ImageGeneratorV2 {
     }
   }
 
-  // 高度な記事分割（OpenAI GPT対応）
+  // 高度な記事分割（新仕様対応）
   async splitArticle(content, maxImages = 5) {
-    const headings = this.detectHeadings(content);
-    if (headings.length > 0) {
-      // 見出しがある場合：OpenAI GPTで見出しベース分析
-      if (this.openaiApiKey) {
-        try {
-          return await this.splitContentWithOpenAI(content, true, headings.map(h => h.heading), maxImages);
-        } catch (error) {
-          console.warn('[imageGen] OpenAI splitting failed, falling back to local merge:', error.message);
-          return this.mergeSimilarHeadings(headings, Math.min(maxImages, 5));
-        }
-      }
-      return this.mergeSimilarHeadings(headings, Math.min(maxImages, 5));
-    }
-
-    if (content.length < 200) {
-      return [{ index: 0, text: content.trim(), heading: null }];
-    }
-
-    // 見出しがない場合：OpenAI GPTでセマンティック分析
+    console.log(`[imageGen] Starting article split. Content length: ${content.length}`);
+    
+    // Step 1: 文字数に応じてチャンク数を決定
+    const targetChunkCount = this.determineChunkCount(content.length);
+    console.log(`[imageGen] Target chunk count: ${targetChunkCount} (based on ${content.length} chars)`);
+    
+    // Step 2: 意味の区切りでチャンク化（GPT優先）
     if (this.openaiApiKey) {
       try {
-        return await this.splitContentWithOpenAI(content, false, [], maxImages);
+        return await this.splitContentSemanticGPT(content, targetChunkCount);
       } catch (error) {
-        console.warn('[imageGen] OpenAI splitting failed, falling back to deterministic split:', error.message);
-        return this.semanticSplit(content, {
-          maxChunks: Math.min(maxImages, 5),
-          maxCharsPerChunk: 400,
-        });
+        console.warn('[imageGen] OpenAI semantic splitting failed, falling back to local split:', error.message);
+        return this.semanticSplitLocal(content, targetChunkCount);
       }
     }
 
-    return this.semanticSplit(content, {
-      maxChunks: Math.min(maxImages, 5),
-      maxCharsPerChunk: 400,
-    });
+    // フォールバック: ローカル意味分割
+    return this.semanticSplitLocal(content, targetChunkCount);
+  }
+
+  // 文字数に応じたチャンク数決定
+  determineChunkCount(contentLength) {
+    if (contentLength <= 500) return 1;
+    if (contentLength <= 800) return 2;
+    if (contentLength <= 1200) return 3;
+    if (contentLength <= 1600) return 4;
+    return 5; // 2000文字超
   }
 
   // マークダウン風の見出しを検出
@@ -169,7 +161,127 @@ class ImageGeneratorV2 {
     return chunks.slice(0, options.maxChunks);
   }
 
-  // OpenAI GPT-4o-miniによる高度なセマンティック分割
+  // GPTによる意味の区切りでのチャンク化
+  async splitContentSemanticGPT(content, targetChunkCount) {
+    console.log(`[imageGen] Using OpenAI for semantic splitting into ${targetChunkCount} chunks`);
+    
+    const systemPrompt = `あなたは日本語の記事を意味の区切りで分割する専門家です。
+重要: 絶対に要約せず、元の文章をそのまま使用してください。
+
+指示:
+1. 記事を${targetChunkCount}個の意味のある塊に分割
+2. 各塊は意味的に完結した内容にする
+3. 文字数ではなく意味で区切る（段落・話題の変わり目など）
+4. 元の文章を一切変更・要約しない
+5. 各塊は原文のまま抽出する
+
+出力形式（JSON）:
+{
+  "chunks": [
+    {
+      "index": 0,
+      "text": "元の文章をそのまま抽出",
+      "reason": "分割理由"
+    }
+  ]
+}`;
+      
+    const userPrompt = `以下の記事を${targetChunkCount}個の意味のある塊に分割してください。
+
+【記事】
+${content}
+
+要約は禁止。元の文章をそのまま使用してJSON形式で出力してください。`;
+
+    const response = await this.callOpenAI(systemPrompt, userPrompt);
+    return this.parseGPTChunks(response, targetChunkCount);
+  }
+
+  // OpenAI API呼び出し
+  async callOpenAI(systemPrompt, userPrompt) {
+    const payload = {
+      model: "gpt-4o-mini",
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt }
+      ],
+      max_tokens: 4000,
+      temperature: 0.1
+    };
+
+    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${this.openaiApiKey}`
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`OpenAI API error: ${response.status} - ${errorText}`);
+    }
+
+    const data = await response.json();
+    return data.choices?.[0]?.message?.content;
+  }
+
+  // GPTレスポンスのパース
+  parseGPTChunks(response, targetCount) {
+    try {
+      const parsed = JSON.parse(response);
+      const chunks = parsed.chunks || [];
+      
+      return chunks.slice(0, targetCount).map((chunk, index) => ({
+        index,
+        text: chunk.text?.trim() || '',
+        heading: null, // 意味分割では見出しはなし
+        reason: chunk.reason || ''
+      }));
+    } catch (error) {
+      console.error('[imageGen] Failed to parse GPT response:', error);
+      throw new Error('Invalid GPT response format');
+    }
+  }
+
+  // ローカル意味分割（フォールバック）
+  semanticSplitLocal(content, targetCount) {
+    console.log(`[imageGen] Using local semantic splitting into ${targetCount} chunks`);
+    
+    // 段落や句点で区切って意味的な分割を試行
+    const paragraphs = content.split(/\n\s*\n|\。\s*(?=[^\d])/).filter(p => p.trim());
+    const chunks = [];
+    
+    if (paragraphs.length <= targetCount) {
+      // 段落数が目標以下の場合、段落ごとに分割
+      return paragraphs.slice(0, targetCount).map((text, index) => ({
+        index,
+        text: text.trim(),
+        heading: null
+      }));
+    }
+    
+    // 段落を組み合わせて目標チャンク数に
+    const chunkSize = Math.ceil(paragraphs.length / targetCount);
+    for (let i = 0; i < targetCount && i * chunkSize < paragraphs.length; i++) {
+      const startIdx = i * chunkSize;
+      const endIdx = Math.min(startIdx + chunkSize, paragraphs.length);
+      const chunkText = paragraphs.slice(startIdx, endIdx).join('\n\n');
+      
+      if (chunkText.trim()) {
+        chunks.push({
+          index: i,
+          text: chunkText.trim(),
+          heading: null
+        });
+      }
+    }
+    
+    return chunks;
+  }
+
+  // 旧実装（削除予定）
   async splitContentWithOpenAI(content, hasHeadings, headings, maxImages = 5) {
     console.log("[imageGen] Using OpenAI GPT-4o-mini for content analysis");
     
@@ -286,94 +398,117 @@ ${content}
     }
   }
 
-  // プロンプト生成（見出し対応）
+  // 新仕様: チャンクから具体的場面を抽出してプロンプト化
   async generateImagePrompt(chunk, style = 'modern', aspectRatio = '1:1') {
     if (this.mockMode) {
       return this.generateMockPrompt(chunk.text, style, chunk.heading);
     }
 
     try {
-      const styleGuides = {
-        photo: 'photorealistic, detailed, high quality photography style',
-        anime: 'anime style, manga illustration, Japanese animation aesthetic',
-        '3d': '3D rendered, computer graphics, realistic 3D modeling',
-        pixel: 'pixel art style, retro gaming aesthetic, 8-bit graphics',
-        watercolor: 'watercolor painting style, soft brushstrokes, artistic',
-        // 旧スタイル（互換性用）
-        modern: 'modern, clean, professional, minimalist aesthetic',
-        classic: 'classic, elegant, traditional, refined style',
-        minimal: 'minimal, simple, clean lines, monochromatic',
-        colorful: 'vibrant, colorful, dynamic, energetic'
-      };
-
-      const headingText = chunk.heading ? `\nHeading: "${chunk.heading}"` : '';
-      const scope = chunk.heading || '記事内容';
-
-      // 記事内容を含めたプロンプト生成
-      // チャンク全体を使用（最大500文字まで）
-      const articleContent = chunk.text.substring(0, 500); 
-      const chunkSummary = chunk.heading ? `【${chunk.heading}】` : '【本文】';
+      // Step 1: チャンクから画像化する具体的場面を抽出
+      const specificScene = await this.extractSpecificScene(chunk);
+      console.log(`[imageGen] DEBUG - Extracted scene for chunk ${chunk.index}:`, specificScene.substring(0, 100) + '...');
       
-      // 見出しによって異なるプロンプト指示を生成
-      let contextHint = '';
-      if (chunk.heading) {
-        const heading = chunk.heading.toLowerCase();
-        if (heading.includes('はじめ') || heading.includes('導入') || heading.includes('症状')) {
-          contextHint = '痛みに苦しむ瞬間を表現';
-        } else if (heading.includes('危険') || heading.includes('リスク') || heading.includes('放置')) {
-          contextHint = '深刻な表情で警告的な雰囲気';
-        } else if (heading.includes('方法') || heading.includes('着替え') || heading.includes('姿勢')) {
-          contextHint = '正しい動作を実践している様子';
-        } else if (heading.includes('ケア') || heading.includes('ストレッチ') || heading.includes('ほぐす')) {
-          contextHint = 'ストレッチや体操をしている様子';
-        } else if (heading.includes('まとめ') || heading.includes('結論') || heading.includes('改善')) {
-          contextHint = '改善して明るい表情';
-        }
-      }
-      
-      const systemPrompt = `${chunkSummary}
-${articleContent}
-
-上記の記事セクションの内容を表現する画像生成プロンプトを英語で作成してください。
-${contextHint ? `特に「${contextHint}」を意識して。` : ''}
-
-参考例（この形式で記事内容に合わせて作成）:
-- "Middle-aged Japanese woman shoulder pain putting on sweater, worried face"
-- "Japanese woman incorrect posture warning, serious expression"
-- "Japanese woman proper dressing technique, helpful demonstration"
-- "Japanese woman doing shoulder stretches, focused expression"
-- "Japanese woman happy after recovery, bright smile"
-
-要求:
-- この記事セクションの具体的な内容を反映
-- 日本人の人物（記事に合った年齢・性別）
-- セクションの内容に応じた感情・表情・動作
-- 文字やテキストは絶対に含めない
-- ${styleGuides[style] || styleGuides.modern}スタイル
-- 英語で70文字程度`;
-
-      console.log(`[imageGen] DEBUG - Chunk ${chunk.index} heading:`, chunk.heading);
-      console.log(`[imageGen] DEBUG - Context hint:`, contextHint);
-      console.log(`[imageGen] DEBUG - Chunk text:`, chunk.text.substring(0, 100) + '...');
-      console.log(`[imageGen] DEBUG - Article content:`, articleContent.substring(0, 100) + '...');
-      console.log(`[imageGen] DEBUG - System prompt:`, systemPrompt.substring(0, 200) + '...');
-
-      const result = await this.geminiModel.generateContent(systemPrompt);
-      const geminiResponse = result.response;
-      let imagePrompt = geminiResponse.text().trim();
-      
-      // 80文字制限に変更（より詳細なプロンプトが必要）
-      if (imagePrompt.length > 80) {
-        imagePrompt = imagePrompt.substring(0, 80);
-      }
-      
-      console.log(`[imageGen] Generated prompt for chunk ${chunk.index} "${chunk.heading || 'no heading'}":`, imagePrompt);
-      return imagePrompt;
+      // Step 2: 抽出した場面をプロンプト化
+      return await this.sceneToPrompt(specificScene, style);
       
     } catch (error) {
       console.error('[imageGen] Prompt generation error:', error);
       return this.generateMockPrompt(chunk.text, style, chunk.heading);
     }
+  }
+
+  // チャンクから具体的な場面を抽出（要約禁止）
+  async extractSpecificScene(chunk) {
+    if (this.openaiApiKey) {
+      try {
+        const systemPrompt = `あなたは日本語の文章から画像として表現できる具体的な場面を抽出する専門家です。
+
+重要な制約:
+- 絶対に要約しない
+- 元の文章から具体的な場面の部分をそのまま抽出
+- 人物の動作・表情・状況が描かれた部分を選ぶ
+- 抽出した文章は原文のまま変更しない
+
+例:
+元文: "朝の身支度で、いつものようにニットを着ようと腕を上げた瞬間、「うっ...」と肩に鋭い痛みが走った経験はありませんか"
+抽出: "ニットを着ようと腕を上げた瞬間、「うっ...」と肩に鋭い痛みが走った"
+
+抽出した場面の文章だけを返してください。`;
+
+        const userPrompt = `以下の文章から、画像として表現できる最も具体的で視覚的な場面を原文のまま抽出してください。
+
+【文章】
+${chunk.text}
+
+具体的な人物の動作・表情・状況が描かれた部分を原文のまま抽出してください。`;
+
+        const response = await this.callOpenAI(systemPrompt, userPrompt);
+        return response?.trim() || chunk.text.substring(0, 200);
+        
+      } catch (error) {
+        console.warn('[imageGen] Scene extraction failed, using chunk text:', error.message);
+        return chunk.text.substring(0, 200);
+      }
+    }
+    
+    // フォールバック: チャンクの最初の部分を使用
+    return chunk.text.substring(0, 200);
+  }
+
+  // 抽出した場面をプロンプト化
+  async sceneToPrompt(sceneText, style) {
+    const styleGuides = {
+      photo: 'photorealistic, detailed, high quality photography style',
+      anime: 'anime style, manga illustration, Japanese animation aesthetic',
+      '3d': '3D rendered, computer graphics, realistic 3D modeling',
+      pixel: 'pixel art style, retro gaming aesthetic, 8-bit graphics',
+      watercolor: 'watercolor painting style, soft brushstrokes, artistic',
+      modern: 'modern, clean, professional, minimalist aesthetic',
+      classic: 'classic, elegant, traditional, refined style',
+      minimal: 'minimal, simple, clean lines, monochromatic',
+      colorful: 'vibrant, colorful, dynamic, energetic'
+    };
+
+    if (this.openaiApiKey) {
+      try {
+        const systemPrompt = `あなたは日本語の場面描写を英語の画像生成プロンプトに変換する専門家です。
+
+要求:
+- 日本人の人物を必ず含める
+- 場面の具体的な動作・表情・状況を表現
+- 文字やテキストは絶対に含めない
+- ${styleGuides[style] || styleGuides.modern}スタイル
+- 英語で70文字程度
+- 自然で具体的な描写にする
+
+参考例:
+"ニットを着ようと腕を上げた瞬間、肩に痛みが走った" → "Japanese woman raising arms putting on sweater, sudden shoulder pain expression"`;
+
+        const userPrompt = `以下の日本語の場面を英語の画像生成プロンプトに変換してください。
+
+【場面】
+${sceneText}
+
+日本人の人物を含む具体的で自然な英語プロンプトを70文字程度で作成してください。`;
+
+        const response = await this.callOpenAI(systemPrompt, userPrompt);
+        let prompt = response?.trim() || '';
+        
+        if (prompt.length > 80) {
+          prompt = prompt.substring(0, 80);
+        }
+        
+        return prompt;
+        
+      } catch (error) {
+        console.warn('[imageGen] Prompt conversion failed, using fallback:', error.message);
+        return this.generateMockPrompt(sceneText, style, null);
+      }
+    }
+    
+    // フォールバック
+    return this.generateMockPrompt(sceneText, style, null);
   }
 
   // モックプロンプト生成（見出し対応）
