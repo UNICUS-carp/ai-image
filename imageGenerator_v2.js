@@ -215,13 +215,35 @@ Return a JSON array with objects containing: {"text": "segment content", "summar
   async extractScene(chunk) {
     if (this.openaiApiKey) {
       try {
-        const systemPrompt = `Extract the main visual scene from the text. 
-Focus on: people, actions, objects, settings, emotions.
-Be concise and specific.`;
+        const systemPrompt = `You are an expert at extracting visual scenes from Japanese text content.
 
-        const userPrompt = `Extract visual scene:\n${chunk.text}`;
+TASK: Extract a specific, concrete visual scene from the given text that directly relates to the content's subject matter.
+
+RULES:
+1. Analyze the text's main topic and context carefully
+2. Extract only visual elements that are explicitly mentioned or strongly implied
+3. Focus on: specific people/characters, concrete actions, physical objects, real environments
+4. Avoid generic scenes unrelated to the content
+5. If the text is about health/medical topics, focus on people in relevant settings (clinic, home, office)
+6. If the text is about technology, focus on people using devices or technology environments
+7. Be specific about the person's activity, expression, and setting
+8. Return a clear, concrete visual description in English
+
+EXAMPLE:
+Input: "肩こりの治療について説明します"
+Output: "A person sitting at a desk showing signs of shoulder discomfort, in an office environment"
+
+NOT: "A lion in the savanna" (completely unrelated)`;
+
+        const userPrompt = `Text content: "${chunk.text}"
+Text heading/summary: "${chunk.heading || 'No heading'}"
+
+Extract a specific visual scene that directly relates to this content:`;
         
         const response = await this.callOpenAI(systemPrompt, userPrompt);
+        console.log(`[imageGen] Scene extraction input: "${chunk.text.substring(0, 100)}..."`);
+        console.log(`[imageGen] Scene extraction output: "${response}"`);
+        
         if (response && response.length > 30) {
           return response.trim();
         }
@@ -230,13 +252,36 @@ Be concise and specific.`;
       }
     }
     
-    // フォールバック：重要な文を抽出
-    const sentences = chunk.text.split(/[。！？]/);
-    const importantSentences = sentences.filter(s => 
-      s.length > 10 && (s.includes('は') || s.includes('が') || s.includes('を'))
-    );
+    // フォールバック：コンテンツベースのシーン生成
+    return this.generateContextualScene(chunk);
+  }
+
+  // コンテンツに基づいたシーン生成
+  generateContextualScene(chunk) {
+    const text = chunk.text.toLowerCase();
     
-    return importantSentences.slice(0, 2).join('。') || chunk.text.substring(0, 100);
+    // 健康・医療関連
+    if (text.includes('肩こり') || text.includes('痛み') || text.includes('治療') || text.includes('マッサージ')) {
+      return 'A person in a medical or wellness setting, showing signs of discomfort in neck/shoulder area, seeking relief';
+    }
+    
+    // 温泉・リラクゼーション関連
+    if (text.includes('温泉') || text.includes('リラックス') || text.includes('癒し')) {
+      return 'A person relaxing in a spa or hot spring environment, surrounded by natural elements';
+    }
+    
+    // オフィス・仕事関連
+    if (text.includes('デスク') || text.includes('仕事') || text.includes('オフィス') || text.includes('パソコン')) {
+      return 'A person working at a desk in an office environment, showing signs of workplace stress';
+    }
+    
+    // 日常生活関連
+    if (text.includes('日常') || text.includes('生活') || text.includes('習慣')) {
+      return 'A person in a home environment performing daily activities';
+    }
+    
+    // デフォルト：一般的な人物シーン
+    return 'A person in a modern indoor setting, natural lighting, everyday environment';
   }
 
   // プロンプト生成（汎用的）
@@ -251,15 +296,24 @@ Be concise and specific.`;
 
     if (this.openaiApiKey) {
       try {
-        const systemPrompt = `Convert text to image generation prompt.
-Rules:
-- Extract visual elements only
-- Include style: ${styleGuides[style]}
-- Add "no text, no letters"
-- Keep under 120 characters
-- Be specific and clear
-- NEVER include: animals, lions, tigers, wildlife, safari, jungle
-- Focus on human activities, objects, environments relevant to the content`;
+        const systemPrompt = `You are an expert at converting scene descriptions into precise image generation prompts.
+
+TASK: Transform the given scene description into a clear, specific image generation prompt.
+
+REQUIREMENTS:
+1. Preserve all essential visual elements from the scene description
+2. Add technical specifications: "${styleGuides[style]}"
+3. Include "no text, no letters" directive
+4. Keep under 120 characters total
+5. Be highly specific about setting, people, objects, and actions
+6. Maintain direct relevance to the original scene
+7. Use clear, descriptive language
+
+EXAMPLE:
+Input: "A person sitting at a desk showing signs of shoulder discomfort, in an office environment"
+Output: "Person at office desk, touching shoulder in discomfort, indoor lighting, ${styleGuides[style]}, no text, no letters"
+
+Focus on accuracy and relevance to the source material.`;
 
         const userPrompt = `Convert to image prompt:\n${sceneText}`;
         
@@ -281,27 +335,27 @@ Rules:
     return this.generateBasicPrompt(sceneText, style);
   }
 
-  // プロンプト検証機能
+  // プロンプト検証機能（関連性重視）
   validatePrompt(prompt) {
     if (!prompt || prompt.length < 10) {
       console.warn('[imageGen] Prompt too short');
       return false;
     }
     
-    // 無関係なキーワードをチェック
-    const bannedKeywords = ['lion', 'lions', 'tiger', 'elephant', 'safari', 'jungle', 'wildlife', 'savanna', 'africa'];
     const lowerPrompt = prompt.toLowerCase();
     
-    for (const keyword of bannedKeywords) {
-      if (lowerPrompt.includes(keyword)) {
-        console.warn(`[imageGen] Prompt contains banned keyword: ${keyword}`);
-        return false;
-      }
-    }
-    
-    // "no text, no letters"が含まれているかチェック
+    // 必須要素のチェック
     if (!lowerPrompt.includes('no text')) {
       console.warn('[imageGen] Prompt missing "no text" directive');
+      return false;
+    }
+    
+    // 人物や環境要素の存在をチェック（より良い関連性のため）
+    const goodElements = ['person', 'people', 'office', 'desk', 'home', 'indoor', 'sitting', 'standing', 'working', 'medical', 'spa', 'wellness'];
+    const hasRelevantElements = goodElements.some(element => lowerPrompt.includes(element));
+    
+    if (!hasRelevantElements) {
+      console.warn('[imageGen] Prompt lacks relevant human/environment elements');
       return false;
     }
     
