@@ -276,7 +276,9 @@ ${content}
       const headingText = chunk.heading ? `\nHeading: "${chunk.heading}"` : '';
       const scope = chunk.heading || '記事内容';
 
-      const systemPrompt = `Create a very short image prompt (maximum 50 characters) for: ${scope}. Style: ${styleGuides[style] || styleGuides.modern}. No text in image.`;
+      // 記事内容を含めたプロンプト生成
+      const articleContent = chunk.text.substring(0, 200); // 最初の200文字
+      const systemPrompt = `記事内容: ${articleContent}\n\n上記内容の画像プロンプトを30文字以内で生成。スタイル: ${styleGuides[style] || styleGuides.modern}`;
 
       const result = await this.geminiModel.generateContent(systemPrompt);
       const geminiResponse = result.response;
@@ -633,6 +635,48 @@ Generate an optimized image generation prompt:`;
     };
   }
 
+  // スタイルマッピング
+  get styleMap() {
+    return {
+      photo: '写真画質',
+      deformed: 'デフォルメアニメ',
+      watercolor: '手書き水彩画',
+      detailed: '精密イラスト',
+      pictogram: 'ピクトグラム',
+      modern: 'モダン',
+      classic: 'クラシック',
+      minimal: 'ミニマル',
+      colorful: 'カラフル'
+    };
+  }
+
+  // 言語と地域検出
+  detectLanguageAndRegion(content) {
+    // 日本語の文字が含まれているかチェック
+    const hasJapanese = /[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]/.test(content);
+    
+    if (hasJapanese) {
+      return {
+        language: 'ja',
+        region: '日本',
+        era: '現代',
+        style: '日本的美意識'
+      };
+    }
+    
+    return {
+      language: 'en',
+      region: '国際',
+      era: '現代',
+      style: '国際的スタンダード'
+    };
+  }
+
+  // 安全性ガイドライン構築
+  buildSafetyGuidelines(regionInfo) {
+    return `安全性ガイドライン: ${regionInfo.region}の文化的配慮を重視し、適切な表現を使用`;
+  }
+
   // 再生成プロンプト構築（TypeScript版から移植）
   buildRegeneratePrompt(originalPrompt, instructions, style, aspectRatio, content = "") {
     // 言語と地域を検出（元のプロンプトから抽出、なければ修正指示から）
@@ -658,6 +702,16 @@ Generate an optimized image generation prompt:`;
     ].join("\n");
   }
 
+  // Geminiによる画像生成（再生成用）
+  async generateWithGemini(prompt, aspectRatio = '1:1') {
+    try {
+      return await this.generateImageWithGemini2_5Flash(prompt, aspectRatio);
+    } catch (error) {
+      console.error('[imageGen] Gemini generation failed:', error);
+      return null;
+    }
+  }
+
   // 単一画像再生成
   async regenerateSingleImage(originalPrompt, instructions, options = {}) {
     try {
@@ -675,12 +729,13 @@ Generate an optimized image generation prompt:`;
       }
 
       if (!imageDataUrl) {
-        imageDataUrl = this.generateEnhancedPlaceholder(
-          { index: 0, body: instructions, heading: '修正版' },
+        const placeholderData = this.generatePlaceholderImage(
+          { index: 0, text: instructions, heading: '修正版' },
           regeneratePrompt,
           taste,
           aspectRatio
         );
+        imageDataUrl = placeholderData.dataUrl;
       }
 
       return {
