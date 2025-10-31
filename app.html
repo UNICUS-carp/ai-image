@@ -608,9 +608,26 @@
               <button class="download-btn" onclick="downloadImage('${image.title || `画像_${index + 1}`}', '${image.dataUrl}')" style="flex: 1;">
                 ⬇️ ダウンロード
               </button>
-              <button class="regenerate-btn" onclick="showRegenerateOptions(${index})" style="flex: 1;">
+              <button class="regenerate-btn" onclick="executeRegenerationDirect(${index})" style="flex: 1;">
                 🔄 修正
               </button>
+            </div>
+            <!-- 修正UI常時表示 -->
+            <div style="background: #f8f9fa; border: 1px solid #ddd; border-radius: 8px; padding: 10px; margin-top: 10px;">
+              <div style="display: flex; gap: 10px;">
+                <select id="regenerate-style-${index}" style="flex: 1; padding: 6px; border: 1px solid #ccc; border-radius: 4px;">
+                  <option value="photo">写真画質</option>
+                  <option value="deformed">デフォルメアニメ</option>
+                  <option value="watercolor">手書き水彩画</option>
+                  <option value="detailed">精密イラスト</option>
+                  <option value="pictogram">ピクトグラム</option>
+                </select>
+                <select id="regenerate-ratio-${index}" style="flex: 1; padding: 6px; border: 1px solid #ccc; border-radius: 4px;">
+                  <option value="16:9">横長</option>
+                  <option value="1:1">正方形</option>
+                  <option value="9:16">縦長</option>
+                </select>
+              </div>
             </div>
           </div>
         `;
@@ -728,6 +745,23 @@
       cancelRegeneration();
       
       // 再生成実行
+      autoRegenerateImage(imageIndex, selectedStyle, selectedRatio);
+    }
+
+    // 直接再生成（常時表示されているUI用）
+    function executeRegenerationDirect(imageIndex) {
+      const styleSelect = document.getElementById(`regenerate-style-${imageIndex}`);
+      const ratioSelect = document.getElementById(`regenerate-ratio-${imageIndex}`);
+      
+      if (!styleSelect || !ratioSelect) {
+        showMessage('修正オプションが見つかりません', 'error');
+        return;
+      }
+      
+      const selectedStyle = styleSelect.value;
+      const selectedRatio = ratioSelect.value;
+      
+      // 直接再生成実行（UIは削除しない）
       autoRegenerateImage(imageIndex, selectedStyle, selectedRatio);
     }
 
